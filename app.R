@@ -28,6 +28,8 @@ library(enrichplot)
 library(AnnotationDbi)
 library(ggrepel) # 遺伝子ラベルの重なり回避に必要
 library(maSigPro) # 時系列解析用に追加
+library(rhandsontable) # ★ これを追加！
+
 # ★★★ 生物種に合わせて OrgDb パッケージをロード ★★★
 # library(org.Hs.eg.db) # ヒトの場合
 library(org.Mm.eg.db) # マウスの場合 (例として残しています)
