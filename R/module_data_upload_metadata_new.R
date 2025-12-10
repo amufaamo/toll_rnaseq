@@ -1,15 +1,18 @@
-# (セッション管理機能とサンプル選択機能を統合)
+# R/module_data_upload_metadata.R
+# (エイリアス検索によるID変換率向上版)
 
 library(shiny)
-library(data.table) # fread, setnames, setDT, copy, set
-library(purrr)      # map
-library(dplyr)      # full_join, left_join
-library(shinycssloaders) # withSpinner
-library(plotly)     # plotlyOutput
-library(AnnotationDbi) # mapIds, columns, keytypes
+library(data.table)
+library(purrr)
+library(dplyr)
+library(shinycssloaders)
+library(plotly)
+library(AnnotationDbi)
+library(DT)
 
-# --- Species UI Choices (UI表示用、値は orgdb_species_map のキーと一致) ---
-species_choices_ui <- c( # ユーザーに表示する名前 = rv$selected_species に格納される値
+# --- Species UI Choices ---
+# (変更なし)
+species_choices_ui <- c(
   "Human (Homo sapiens)" = "Homo_sapiens",
   "Mouse (Mus musculus)" = "Mus_musculus",
   "Rat (Rattus norvegicus)" = "Rattus_norvegicus",
@@ -33,7 +36,8 @@ species_choices_ui <- c( # ユーザーに表示する名前 = rv$selected_speci
   "Others (Keep Original ID)" = "Others_Original"
 )
 
-# --- Species to OrgDb package mapping (グローバルまたはヘルパースクリプトに配置推奨) ---
+# --- Species to OrgDb package mapping ---
+# (変更なし)
 orgdb_species_map <- c(
   "Homo_sapiens" = "org.Hs.eg.db",
   "Mus_musculus" = "org.Mm.eg.db",
@@ -57,168 +61,114 @@ orgdb_species_map <- c(
   "Myxococcus_xanthus_DK1622" = "org.Mxanthus.db"
 )
 
-# --- Helper function: Detect Gene ID type ---
+# --- Helper functions (ID detection/Conversion) ---
 detect_gene_id_type <- function(ids) {
-  ids_clean <- na.omit(ids[ids != "" & !is.na(ids)])
-  if (length(ids_clean) == 0) return("UNKNOWN")
-  n_total <- length(ids_clean)
-  n_sample <- min(n_total, 1000)
-  ids_sample <- sample(ids_clean, n_sample)
-  
-  ensembl_pattern <- "^ENS[A-Z0-9]*[FPTG]\\d{10,}(\\.\\d+)?$"
-  ensembl_match_rate <- mean(grepl(ensembl_pattern, ids_sample, ignore.case = TRUE))
-  if (ensembl_match_rate > 0.8) return("ENSEMBL")
-  
-  refseq_pattern <- "^[NX][CMPWTZ]_[0-9]+(\\.\\d+)?$"
-  refseq_match_rate <- mean(grepl(refseq_pattern, ids_sample, ignore.case = TRUE))
-  if (refseq_match_rate > 0.8) return("REFSEQ")
-  
-  entrez_pattern <- "^[0-9]+$"
-  entrez_match_rate <- mean(grepl(entrez_pattern, ids_sample))
-  if (entrez_match_rate > 0.9) return("ENTREZID")
-  
-  symbol_pattern <- "^([A-Za-z][A-Za-z0-9-]*[A-Za-z0-9]|[A-Za-z])$"
-  symbol_match_rate <- mean(grepl(symbol_pattern, ids_sample))
-  if (symbol_match_rate > 0.7 && ensembl_match_rate < 0.1 && refseq_match_rate < 0.1 && entrez_match_rate < 0.1) {
-    return("SYMBOL")
-  }
-  
+  ids_clean <- na.omit(ids[ids != "" & !is.na(ids)]); if (length(ids_clean) == 0) return("UNKNOWN")
+  n_total <- length(ids_clean); n_sample <- min(n_total, 1000); ids_sample <- sample(ids_clean, n_sample)
+  if (mean(grepl("^ENS[A-Z0-9]*[FPTG]\\d{10,}(\\.\\d+)?$", ids_sample, ignore.case = TRUE)) > 0.8) return("ENSEMBL")
+  if (mean(grepl("^[NX][CMPWTZ]_[0-9]+(\\.\\d+)?$", ids_sample, ignore.case = TRUE)) > 0.8) return("REFSEQ")
+  if (mean(grepl("^[0-9]+$", ids_sample)) > 0.9) return("ENTREZID")
+  if (mean(grepl("^([A-Za-z][A-Za-z0-9-]*[A-Za-z0-9]|[A-Za-z])$", ids_sample)) > 0.7 && mean(grepl("^ENS",ids_sample,T))<0.1 && mean(grepl("^[NX][M_]",ids_sample,T))<0.1 && mean(grepl("^[0-9]+$",ids_sample))<0.1) return("SYMBOL")
   return("UNKNOWN")
 }
 
-# --- Helper function: Convert IDs to Entrez (or pass through if "Others_Original") ---
+# ★★★ 修正: エイリアス検索を追加した関数 ★★★
 convert_or_pass_ids <- function(original_ids, detected_keytype, selected_species_code) {
   if (selected_species_code == "Others_Original") {
-    message("[ID_PROC_UPLOAD] Species is 'Others_Original'. Using original IDs directly.")
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(FALSE, length(original_ids)),
-                failed_count = 0,
-                final_id_type = detected_keytype %||% "ORIGINAL_UNCONVERTED"))
+    return(list(processed_ids = as.character(original_ids), failed_indices = rep(FALSE, length(original_ids)), failed_count = 0, final_id_type = detected_keytype %||% "ORIGINAL_UNCONVERTED", conversion_map = NULL))
   }
-  
   if (detected_keytype == "ENTREZID") {
-    message("[ID_CONV_UPLOAD] Gene IDs are already EntrezID.")
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(FALSE, length(original_ids)),
-                failed_count = 0,
-                final_id_type = "ENTREZID"))
-  }
-  if (detected_keytype == "UNKNOWN" || is.null(selected_species_code) || !nzchar(selected_species_code)) {
-    warning("[ID_CONV_UPLOAD] Cannot convert to EntrezID: Input type is UNKNOWN or species not selected for conversion.")
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(TRUE, length(original_ids)),
-                failed_count = length(original_ids),
-                final_id_type = detected_keytype %||% "UNKNOWN"))
+    return(list(processed_ids = as.character(original_ids), failed_indices = rep(FALSE, length(original_ids)), failed_count = 0, final_id_type = "ENTREZID", conversion_map = NULL))
   }
   
+  # OrgDbの準備
   orgdb_pkg_name <- orgdb_species_map[[selected_species_code]]
-  if (is.null(orgdb_pkg_name) || !nzchar(orgdb_pkg_name)) {
-    warning(paste0("[ID_CONV_UPLOAD] No OrgDb package found for species '", selected_species_code, "'. Cannot convert to EntrezID."))
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(TRUE, length(original_ids)),
-                failed_count = length(original_ids),
-                final_id_type = detected_keytype %||% "UNKNOWN"))
-  }
-  if (!requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
-    stop(paste0("[ID_CONV_UPLOAD] OrgDb package '", orgdb_pkg_name, "' not installed. Please install it. Cannot convert to EntrezID."))
+  if (is.null(orgdb_pkg_name) || !requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
+    warning(paste0("OrgDb package '", orgdb_pkg_name, "' not found."))
+    return(list(processed_ids = as.character(original_ids), failed_indices = rep(TRUE, length(original_ids)), failed_count = length(original_ids), final_id_type = detected_keytype %||% "UNKNOWN", conversion_map = NULL))
   }
   
   require(orgdb_pkg_name, character.only = TRUE, quietly = TRUE)
   org_db <- get(orgdb_pkg_name)
-  
   keys_to_convert <- as.character(original_ids)
-  if (detected_keytype == "ENSEMBL") {
-    keys_to_convert <- gsub("\\..*$", "", keys_to_convert)
-  }
+  if (detected_keytype == "ENSEMBL") { keys_to_convert <- gsub("\\..*$", "", keys_to_convert) }
   
-  if (!"ENTREZID" %in% columns(org_db)) {
-    warning(paste0("[ID_CONV_UPLOAD] 'ENTREZID' column not found in OrgDb '", orgdb_pkg_name, "'. Cannot convert."))
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(TRUE, length(original_ids)),
-                failed_count = length(original_ids),
-                final_id_type = detected_keytype %||% "UNKNOWN"))
-  }
   if (!detected_keytype %in% keytypes(org_db)) {
-    warning(paste0("[ID_CONV_UPLOAD] Keytype '", detected_keytype, "' not supported by '", orgdb_pkg_name, "'. Cannot convert."))
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(TRUE, length(original_ids)),
-                failed_count = length(original_ids),
-                final_id_type = detected_keytype %||% "UNKNOWN"))
+    warning(paste0("Keytype '", detected_keytype, "' not supported by '", orgdb_pkg_name, "'."))
+    return(list(processed_ids = as.character(original_ids), failed_indices = rep(TRUE, length(original_ids)), failed_count = length(original_ids), final_id_type = detected_keytype %||% "UNKNOWN", conversion_map = NULL))
   }
   
-  message(paste0("[ID_CONV_UPLOAD] Converting ", length(unique(keys_to_convert)), " unique '", detected_keytype,
-                 "' IDs to ENTREZID using '", orgdb_pkg_name, "'."))
-  
+  message(paste0("[ID_CONV] 1st pass: Converting ", length(unique(keys_to_convert)), " unique '", detected_keytype, "' IDs..."))
   unique_input_keys <- unique(keys_to_convert)
+  
+  # 1. まず通常の変換（Symbol -> Entrez）
   entrez_map <- tryCatch(
-    suppressMessages(mapIds(org_db,
-                            keys = unique_input_keys,
-                            column = "ENTREZID",
-                            keytype = detected_keytype,
-                            multiVals = "first")),
-    error = function(e) {
-      warning(paste0("[ID_CONV_UPLOAD] Error during mapIds for EntrezID: ", e$message))
-      NULL
-    }
+    suppressMessages(mapIds(org_db, keys = unique_input_keys, column = "ENTREZID", keytype = detected_keytype, multiVals = "first")),
+    error = function(e) { warning(e$message); NULL }
   )
   
   if (is.null(entrez_map)) {
-    return(list(processed_ids = as.character(original_ids),
-                failed_indices = rep(TRUE, length(original_ids)),
-                failed_count = length(original_ids),
-                final_id_type = detected_keytype %||% "UNKNOWN"))
+    return(list(processed_ids = as.character(original_ids), failed_indices = rep(TRUE, length(original_ids)), failed_count = length(original_ids), final_id_type = detected_keytype %||% "UNKNOWN", conversion_map = NULL))
   }
   
-  converted_values <- entrez_map[keys_to_convert]
+  # 2. 失敗したものを特定
+  failed_keys_1st <- names(entrez_map)[is.na(entrez_map)]
   
+  # 3. エイリアス（別名）で再挑戦 (Symbolの場合のみ有効)
+  if (detected_keytype == "SYMBOL" && length(failed_keys_1st) > 0 && "ALIAS" %in% keytypes(org_db)) {
+    message(paste0("[ID_CONV] 2nd pass: Trying ALIAS lookup for ", length(failed_keys_1st), " failed IDs..."))
+    
+    alias_map <- tryCatch(
+      suppressMessages(mapIds(org_db, keys = failed_keys_1st, column = "ENTREZID", keytype = "ALIAS", multiVals = "first")),
+      error = function(e) { NULL }
+    )
+    
+    if (!is.null(alias_map)) {
+      # 成功したものを元のマップに統合
+      rescued_count <- sum(!is.na(alias_map))
+      message(paste0("[ID_CONV] Rescued ", rescued_count, " IDs using ALIAS."))
+      entrez_map[names(alias_map)] <- alias_map
+    }
+  }
+  
+  # 結果の整形
+  converted_values <- entrez_map[keys_to_convert]
   failed_indices_logical <- is.na(converted_values)
   num_failed <- sum(failed_indices_logical)
   
-  if (num_failed > 0) {
-    message(paste0("[ID_CONV_UPLOAD] ", num_failed, " out of ", length(original_ids),
-                   " original IDs could not be converted to EntrezID from type '", detected_keytype, "'."))
-  }
-  return(list(processed_ids = as.character(converted_values),
-              failed_indices = failed_indices_logical,
-              failed_count = num_failed,
-              final_id_type = "ENTREZID"))
+  final_ids <- as.character(converted_values)
+  # 失敗した箇所は元のIDに戻す
+  final_ids[failed_indices_logical] <- as.character(original_ids[failed_indices_logical])
+  
+  # デバッグ用マップを作成 (Original -> Entrez)
+  debug_map <- data.frame(
+    Original = unique_input_keys,
+    Converted = entrez_map[unique_input_keys],
+    Status = ifelse(is.na(entrez_map[unique_input_keys]), "Failed", "Success"),
+    stringsAsFactors = FALSE
+  )
+  
+  return(list(
+    processed_ids = final_ids,
+    failed_indices = failed_indices_logical,
+    failed_count = num_failed,
+    final_id_type = "ENTREZID_MIXED",
+    conversion_map = debug_map
+  ))
 }
 
-# --- Helper function: Trim common strings from sample names ---
-find_lcp <- function(strs) { # Longest Common Prefix
-  if (length(strs) < 2) return("")
-  char_lists <- strsplit(strs, "")
-  min_len <- min(sapply(char_lists, length))
-  if (min_len == 0) return("")
-  lcp <- ""
-  for (i in 1:min_len) {
-    char_to_check <- char_lists[[1]][i]
-    if (all(sapply(char_lists, function(x) x[i] == char_to_check))) {
-      lcp <- paste0(lcp, char_to_check)
-    } else {
-      break
-    }
-  }
-  return(lcp)
+# --- Helper function: Trim common strings ---
+# (変更なし)
+find_lcp <- function(strs) {
+  if (length(strs) < 2) return(""); char_lists <- strsplit(strs, ""); min_len <- min(sapply(char_lists, length)); if (min_len == 0) return("")
+  lcp <- ""; for (i in 1:min_len) { char_to_check <- char_lists[[1]][i]; if (all(sapply(char_lists, function(x) x[i] == char_to_check))) { lcp <- paste0(lcp, char_to_check) } else { break } }; return(lcp)
 }
-
-find_lcs <- function(strs) { # Longest Common Suffix
-  if (length(strs) < 2) return("")
-  rev_strs <- sapply(strs, function(x) intToUtf8(rev(utf8ToInt(x))))
-  rev_lcs <- find_lcp(rev_strs)
-  lcs <- intToUtf8(rev(utf8ToInt(rev_lcs)))
-  return(lcs)
+find_lcs <- function(strs) {
+  if (length(strs) < 2) return(""); rev_strs <- sapply(strs, function(x) intToUtf8(rev(utf8ToInt(x)))); rev_lcs <- find_lcp(rev_strs); lcs <- intToUtf8(rev(utf8ToInt(rev_lcs))); return(lcs)
 }
-
 trim_common_strings <- function(strs) {
-  if (length(strs) < 2) return(strs)
-  lcp <- find_lcp(strs)
-  lcs <- find_lcs(strs)
-  trimmed_strs <- sub(paste0("^", lcp), "", strs)
-  trimmed_strs <- sub(paste0(lcs, "$"), "", trimmed_strs)
-  return(trimmed_strs)
+  if (length(strs) < 2) return(strs); lcp <- find_lcp(strs); lcs <- find_lcs(strs); trimmed_strs <- sub(paste0("^", lcp), "", strs); trimmed_strs <- sub(paste0(lcs, "$"), "", trimmed_strs); return(trimmed_strs)
 }
-
 
 dataUploadMetadataUI <- function(id) {
   ns <- NS(id)
@@ -226,35 +176,49 @@ dataUploadMetadataUI <- function(id) {
     sidebarPanel(
       width = 4,
       h4("1. ファイルアップロード"),
-      fileInput(ns("featureCountsFiles"),
-                "featureCounts出力ファイルを選択 (.txt, .tsv)",
-                multiple = TRUE, accept = c("text/plain", ".txt", ".tsv"),
-                buttonLabel = "ファイルを選択...", placeholder = "ファイルが選択されていません"),
-      helpText(HTML("各ファイルの1列目(Geneid)、6列目(Length)、7列目(カウント)を読み込みます。<br><b>「生物種」で特定の種を選択した場合:</b> GeneidをEntrez IDに変換します。<br><b>「生物種」で「Others」を選択した場合:</b> Geneidを変換せず、元のIDのまま使用します。")),
-      hr(),
-      h4("2. 生物種選択"),
-      selectInput(ns("species"),
-                  label = "解析対象の生物種またはID処理方法を選択:",
-                  choices = species_choices_ui,
-                  selected = "Homo_sapiens"
+      radioButtons(ns("inputType"), "データの形式:",
+                   choices = c("個別の featureCounts ファイル (複数可)" = "individual",
+                               "結合済みカウント行列 (CSV/TSV)" = "merged"),
+                   selected = "individual"),
+      
+      conditionalPanel(
+        condition = paste0("input['", ns("inputType"), "'] == 'individual'"),
+        fileInput(ns("featureCountsFiles"), "featureCounts出力ファイル", multiple = TRUE, accept = c(".txt", ".tsv")),
+        helpText("各ファイルの1列目(Geneid)、6列目(Length)、7列目(Count)を結合します。")
+      ),
+      conditionalPanel(
+        condition = paste0("input['", ns("inputType"), "'] == 'merged'"),
+        fileInput(ns("mergedCountFile"), "カウント行列ファイル", multiple = FALSE, accept = c(".csv", ".txt", ".tsv")),
+        helpText("行名がGene Symbolの場合、自動でEntrez IDに変換します。")
       ),
       hr(),
+      h4("2. 生物種選択"),
+      selectInput(ns("species"), label = "解析対象の生物種またはID処理方法:", choices = species_choices_ui, selected = "Homo_sapiens"),
+      hr(),
       h4("3. セッション管理"),
-      p("現在の作業状態を保存、または以前の状態を復元します。"),
-      downloadButton(ns("downloadRDS"), "現在のセッションを保存 (.rds)"),
+      downloadButton(ns("downloadRDS"), "セッション保存"),
       br(),br(),
-      fileInput(ns("uploadRDS"), "セッションを復元 (.rds)", accept = c(".rds", ".RDS")),
-      helpText("注意: セッションを復元すると、現在の作業内容は上書きされます。")
+      fileInput(ns("uploadRDS"), "セッション復元", accept = c(".rds", ".RDS"))
     ),
     mainPanel(
       width = 8,
-      h4("サンプル別 合計リード数"),
-      withSpinner(plotlyOutput(ns("librarySizePlot")), type = 6),
-      hr(),
-      h4("サンプル情報入力"),
-      helpText("各サンプルのチェックボックス、名前、グループを編集してください。チェックを外すと解析対象から除外されます。"), ### ★ 変更 ★
-      withSpinner(uiOutput(ns("sampleMetadataInput")), type = 6),
-      helpText("注意: ファイルを再アップロードするか生物種を変更すると、入力したサンプル情報はリセットされることがあります。")
+      tabsetPanel(
+        tabPanel("サンプル情報 & QC",
+                 h4("サンプル別 合計リード数"),
+                 withSpinner(plotlyOutput(ns("librarySizePlot")), type = 6),
+                 hr(),
+                 h4("サンプル情報入力"),
+                 withSpinner(uiOutput(ns("sampleMetadataInput")), type = 6)
+        ),
+        tabPanel("ID変換レポート (デバッグ用)",
+                 h4("Gene ID 変換状況"),
+                 p("ここで、どのような遺伝子IDが変換に成功/失敗したかを確認できます。失敗が多い場合、入力ファイルのID形式や生物種が合っているか確認してください。"),
+                 verbatimTextOutput(ns("idConversionSummary")),
+                 hr(),
+                 h5("変換詳細テーブル (検索可能)"),
+                 DTOutput(ns("idConversionTable"))
+        )
+      )
     )
   )
 }
@@ -264,375 +228,290 @@ dataUploadMetadataServer <- function(id, rv) {
     ns <- session$ns
     
     rv$current_gene_id_type <- reactiveVal("ENTREZID")
+    rv$conversion_debug_info <- reactiveVal(NULL) # デバッグ情報用
     
     data_processing_trigger <- reactive({
-      list(files = input$featureCountsFiles, species = input$species)
+      list(inputType = input$inputType, individualFiles = input$featureCountsFiles, mergedFile = input$mergedCountFile, species = input$species)
     })
     
     observeEvent(data_processing_trigger(), {
-      triggered_data <- data_processing_trigger()
-      files_info <- triggered_data$files
-      species_code <- triggered_data$species
+      trigger <- data_processing_trigger()
+      inputType <- trigger$inputType
+      species_code <- trigger$species
       
-      req(files_info)
+      if (inputType == "individual" && is.null(trigger$individualFiles)) return()
+      if (inputType == "merged" && is.null(trigger$mergedFile)) return()
       
-      if (identical(files_info, rv$file_info) && identical(species_code, rv$selected_species)) {
-        return()
-      }
-      
-      rv$file_info <- files_info
-      rv$selected_species <- species_code
-      
-      file_paths <- rv$file_info$datapath
-      original_filenames <- rv$file_info$name
-      
-      names_no_ext <- sub("\\.[^.]*$", "", original_filenames)
-      trimmed_names <- trim_common_strings(names_no_ext)
-      initial_sample_names <- make.unique(trimmed_names)
-      
-      message("--- File Upload/Species Change Event Start ---")
-      message(paste("Selected species/ID mode for processing:", rv$selected_species))
-      
+      message("--- Data Processing Start ---")
       rv$merged_data <- NULL; rv$sample_metadata <- NULL; rv$gene_lengths <- NULL
       rv$filtered_keep <- NULL; rv$deg_results <- NULL; rv$background_genes_original <- NULL
+      rv$conversion_debug_info(NULL)
+      rv$selected_species <- species_code
       
       tryCatch({
-        raw_data_list <- map(file_paths, ~{
-          dt <- fread(.x, header = TRUE, sep = "\t", stringsAsFactors = FALSE,
-                      select = c(1, 6, 7), na.strings = c("NA", "NaN", ""))
-          validate(need(ncol(dt) >= 3, paste(basename(.x),"に必要な列がありません。")))
-          setnames(dt, c("OriginalGeneid", "Length", "Count"))
-          validate(need(is.numeric(dt$Length), paste(basename(.x),"のLength列が数値ではありません。")))
-          validate(need(is.numeric(dt$Count), paste(basename(.x),"のCount列が数値ではありません。")))
-          dt
-        })
-        message("--- ファイル読み込み完了 ---")
-        validate(need(length(raw_data_list) > 0, "ファイルの読み込みに失敗しました。"))
-        
-        first_file_ids <- raw_data_list[[1]]$OriginalGeneid
-        validate(need(length(first_file_ids) > 0, "最初のファイルにGeneIDが見つかりません。"))
-        detected_original_keytype <- detect_gene_id_type(first_file_ids)
-        
-        if((is.null(detected_original_keytype) || detected_original_keytype == "UNKNOWN") && rv$selected_species != "Others_Original") {
-          stop("アップロードされたファイルのGeneIDタイプを特定できませんでした。'Others'を選択してください。")
-        }
-        
-        id_processing_message <- if (rv$selected_species == "Others_Original") {
-          paste0("元のGeneIDタイプを '", detected_original_keytype %||% "UNKNOWN", "' と推定。このIDを直接使用します。")
-        } else {
-          paste0("元のGeneIDタイプを '", detected_original_keytype %||% "UNKNOWN", "' と推定。EntrezIDへ変換します...")
-        }
-        showNotification(id_processing_message, type="message", duration=7)
-        
-        all_original_geneids_list <- map(raw_data_list, ~ unique(.x$OriginalGeneid))
-        common_original_geneids <- Reduce(intersect, all_original_geneids_list)
-        
-        if(length(common_original_geneids) == 0){
-          stop("アップロードされたファイル間で共通のGeneIDが見つかりませんでした。")
-        }
-        
-        conversion_result <- convert_or_pass_ids(
-          original_ids = common_original_geneids,
-          detected_keytype = detected_original_keytype,
-          selected_species_code = rv$selected_species
-        )
-        
-        rv$current_gene_id_type(conversion_result$final_id_type)
-        message(paste0("--- Current internal GeneID type set to: ", rv$current_gene_id_type(), " ---"))
-        
-        valid_common_indices <- !conversion_result$failed_indices
-        num_successfully_processed_common <- sum(valid_common_indices)
-        
-        if(conversion_result$failed_count > 0 && rv$selected_species != "Others_Original"){
-          showNotification(
-            paste0(conversion_result$failed_count, "個の共通GeneIDが変換できず、除外されます。"),
-            type="warning", duration = 10
-          )
-        }
-        validate(need(num_successfully_processed_common > 0,
-                      "共通のGeneIDを処理できませんでした。生物種やID形式を確認してください。"))
-        
-        common_original_ids_valid <- common_original_geneids[valid_common_indices]
-        common_processed_ids_valid <- conversion_result$processed_ids[valid_common_indices]
-        
-        processed_to_original_map_df <- data.frame(
-          OriginalGeneid = common_original_ids_valid,
-          ProcessedIdCol = common_processed_ids_valid,
-          stringsAsFactors = FALSE
-        )
-        processed_to_original_map_df <- processed_to_original_map_df[!duplicated(processed_to_original_map_df$ProcessedIdCol), ]
-        
-        processed_raw_data_list <- map(raw_data_list, ~{
-          dt_temp <- .x
-          dt_temp_filtered <- dt_temp[OriginalGeneid %in% processed_to_original_map_df$OriginalGeneid, ]
-          dt_temp_merged_processed <- merge(dt_temp_filtered, processed_to_original_map_df, by="OriginalGeneid", all.x=FALSE, all.y=FALSE)
-          dt_temp_merged_processed[, OriginalGeneid := NULL]
-          setnames(dt_temp_merged_processed, "ProcessedIdCol", "Geneid")
-          return(dt_temp_merged_processed)
-        })
-        
-        first_processed_file <- processed_raw_data_list[[1]]
-        rv_gene_lengths_dt <- first_processed_file[, .(Geneid, Length)]
-        rv_gene_lengths_dt <- rv_gene_lengths_dt[!duplicated(Geneid)]
-        rv$gene_lengths <- as.data.frame(rv_gene_lengths_dt)
-        
-        count_data_list_processed <- map(processed_raw_data_list, ~ .x[, .(Geneid, Count)])
-        
-        merged_dt_processed <- data.table::copy(count_data_list_processed[[1]])
-        setnames(merged_dt_processed, "Count", initial_sample_names[1])
-        
-        if (length(count_data_list_processed) > 1) {
-          merged_df_processed_temp <- as.data.frame(merged_dt_processed)
-          for(i in 2:length(count_data_list_processed)) {
-            current_dt_processed_temp <- data.table::copy(count_data_list_processed[[i]])
-            current_sample_name_processed <- initial_sample_names[i]
-            setnames(current_dt_processed_temp, "Count", current_sample_name_processed)
-            merged_df_processed_temp <- dplyr::full_join(merged_df_processed_temp, as.data.frame(current_dt_processed_temp), by = "Geneid")
+        # === A. 個別ファイル ===
+        if (inputType == "individual") {
+          file_paths <- trigger$individualFiles$datapath
+          original_filenames <- trigger$individualFiles$name
+          names_no_ext <- sub("\\.[^.]*$", "", original_filenames)
+          trimmed_names <- trim_common_strings(names_no_ext)
+          initial_sample_names <- make.unique(trimmed_names)
+          
+          raw_data_list <- map(file_paths, ~{
+            dt <- fread(.x, header = TRUE, sep = "\t", stringsAsFactors = FALSE, select = c(1, 6, 7), na.strings = c("NA", "NaN", ""))
+            setnames(dt, c("OriginalGeneid", "Length", "Count"))
+            dt
+          })
+          
+          # IDクリーニング
+          first_file_ids <- trimws(as.character(raw_data_list[[1]]$OriginalGeneid))
+          first_file_ids <- gsub('^"|"$', '', first_file_ids) # 引用符除去
+          
+          detected_keytype <- detect_gene_id_type(first_file_ids)
+          
+          all_original <- map(raw_data_list, ~ {
+            ids <- trimws(as.character(.x$OriginalGeneid))
+            gsub('^"|"$', '', ids)
+          })
+          common_ids <- Reduce(intersect, all_original)
+          if(length(common_ids) == 0) stop("共通のGeneIDが見つかりません。")
+          
+          conversion_res <- convert_or_pass_ids(common_ids, detected_keytype, species_code)
+          rv$current_gene_id_type(conversion_res$final_id_type)
+          rv$conversion_debug_info(conversion_res$conversion_map)
+          
+          map_df <- data.frame(OriginalGeneid = common_ids, Geneid = conversion_res$processed_ids, stringsAsFactors = FALSE)
+          
+          processed_list <- map2(raw_data_list, all_original, function(dt, clean_ids) {
+            dt[, OriginalGeneid := clean_ids] # クリーニング済みIDで上書き
+            dt <- dt[OriginalGeneid %in% map_df$OriginalGeneid, ]
+            merged <- merge(dt, map_df, by="OriginalGeneid")
+            merged[, OriginalGeneid := NULL]
+            merged
+          })
+          
+          rv$gene_lengths <- as.data.frame(processed_list[[1]][, .(Geneid, Length)][!duplicated(Geneid)])
+          
+          count_list <- map(processed_list, ~ .x[, .(Geneid, Count)])
+          merged_dt <- count_list[[1]]
+          setnames(merged_dt, "Count", initial_sample_names[1])
+          
+          if(length(count_list) > 1){
+            merged_df <- as.data.frame(merged_dt)
+            for(i in 2:length(count_list)){
+              curr <- count_list[[i]]
+              setnames(curr, "Count", initial_sample_names[i])
+              merged_df <- full_join(merged_df, as.data.frame(curr), by="Geneid")
+            }
+            merged_dt <- as.data.table(merged_df)
           }
-          setDT(merged_df_processed_temp)
-          merged_dt_processed <- merged_df_processed_temp
-        }
-        
-        numeric_cols <- setdiff(colnames(merged_dt_processed), "Geneid")
-        for (col in numeric_cols) {
-          if(is.numeric(merged_dt_processed[[col]])) {
-            set(merged_dt_processed, which(is.na(merged_dt_processed[[col]])), col, 0)
+          for(col in setdiff(names(merged_dt), "Geneid")) set(merged_dt, which(is.na(merged_dt[[col]])), col, 0)
+          
+          if(any(duplicated(merged_dt$Geneid))){
+            merged_dt <- merged_dt[, lapply(.SD, sum, na.rm=TRUE), by=Geneid, .SDcols=setdiff(names(merged_dt), "Geneid")]
           }
+          rv$merged_data <- as.data.frame(merged_dt)
+          
+        # === B. 結合済みマトリックス ===
+        } else if (inputType == "merged") {
+          req(trigger$mergedFile)
+          infile <- trigger$mergedFile
+          ext <- tools::file_ext(infile$name)
+          sep_char <- if(tolower(ext) %in% c("tsv", "txt")) "\t" else ","
+          
+          all_lines_df <- read.delim(infile$datapath, sep = sep_char, header = FALSE, stringsAsFactors = FALSE, check.names = FALSE, fill = TRUE, quote="")
+          if(nrow(all_lines_df) < 2) stop("ファイルに行が少なすぎます。")
+          
+          # ヘッダー処理 (1行目)
+          raw_header <- as.character(all_lines_df[1, -1])
+          raw_header <- raw_header[!is.na(raw_header) & raw_header != ""]
+          
+          # データ行探索
+          is_valid_count_row <- function(row_vec) {
+             if(length(row_vec) < 2) return(FALSE)
+             vals <- as.character(row_vec[-1])
+             if(any(is.na(vals)) || any(vals == "")) return(FALSE)
+             vals_clean <- gsub(",", "", vals)
+             nums <- suppressWarnings(as.numeric(vals_clean))
+             return(!any(is.na(nums)))
+          }
+          data_start_idx <- -1
+          for(i in 2:nrow(all_lines_df)) {
+             if(is_valid_count_row(all_lines_df[i, ])) { data_start_idx <- i; break }
+          }
+          if(data_start_idx == -1) stop("有効な数値データ行が見つかりませんでした。")
+          
+          candidate_data <- all_lines_df[data_start_idx:nrow(all_lines_df), ]
+          keep_rows_idx <- apply(candidate_data, 1, is_valid_count_row)
+          final_data <- candidate_data[keep_rows_idx, , drop = FALSE]
+          if(nrow(final_data) == 0) stop("データ行が残りませんでした。")
+          
+          # ★★★ IDクリーニング強化 ★★★
+          raw_ids <- as.character(final_data[, 1])
+          clean_ids <- trimws(raw_ids)          # 空白除去
+          clean_ids <- gsub('^"|"$', '', clean_ids) # 引用符除去
+          clean_ids <- gsub("^'|'$", "", clean_ids) # シングルクォート除去
+          
+          counts_part <- final_data[, -1, drop = FALSE]
+          counts_mat <- apply(counts_part, 2, function(x) as.numeric(gsub(",", "", x)))
+          
+          if(length(clean_ids) != nrow(counts_mat)) stop("ID列とデータ列の行数が不一致。")
+          
+          clean_mat <- as.matrix(counts_mat)
+          rownames(clean_mat) <- clean_ids
+          
+          if(ncol(clean_mat) > length(raw_header)) {
+             extra_cols <- (length(raw_header)+1):ncol(clean_mat)
+             raw_header <- c(raw_header, paste0("Sample_", extra_cols))
+          } else if(ncol(clean_mat) < length(raw_header)) {
+             raw_header <- raw_header[1:ncol(clean_mat)]
+          }
+          colnames(clean_mat) <- raw_header
+          initial_sample_names <- raw_header
+          
+          original_ids <- rownames(clean_mat)
+          detected_keytype <- detect_gene_id_type(original_ids)
+          
+          if (species_code != "Others_Original") {
+             message(paste0("Matrix Input: Detected ID type '", detected_keytype, "'. Converting to Entrez..."))
+             conversion_res <- convert_or_pass_ids(original_ids, detected_keytype, species_code)
+             rv$current_gene_id_type(conversion_res$final_id_type)
+             rv$conversion_debug_info(conversion_res$conversion_map)
+             
+             map_df <- data.frame(Original = original_ids, New = conversion_res$processed_ids, stringsAsFactors = FALSE)
+             clean_mat_subset <- clean_mat[map_df$Original, , drop=FALSE]
+             df_for_agg <- as.data.frame(clean_mat_subset)
+             df_for_agg$Geneid <- map_df$New
+             
+             agg_df <- df_for_agg %>% group_by(Geneid) %>% summarise(across(everything(), sum)) %>% ungroup()
+             rv$merged_data <- as.data.frame(agg_df)
+             
+          } else {
+            rv$current_gene_id_type(detected_keytype %||% "Original")
+            rv$conversion_debug_info(data.frame(Original=original_ids, Converted="Skipped", Status="Skipped"))
+            df_res <- as.data.frame(clean_mat)
+            df_res$Geneid <- rownames(clean_mat)
+            df_res <- df_res[, c("Geneid", setdiff(colnames(df_res), "Geneid"))]
+            rv$merged_data <- df_res
+          }
+          rv$gene_lengths <- data.frame(Geneid = rv$merged_data$Geneid, Length = 1, stringsAsFactors = FALSE)
+          showNotification(paste0("読み込み完了。データ開始:", data_start_idx, "行目"), type = "message")
         }
         
-        if(any(duplicated(merged_dt_processed$Geneid))) {
-          count_cols_for_sum_final <- setdiff(colnames(merged_dt_processed), "Geneid")
-          merged_dt_processed_final <- merged_dt_processed[, lapply(.SD, sum, na.rm = TRUE), by = Geneid, .SDcols = count_cols_for_sum_final]
-          showNotification("重複するGeneIDがあったため、カウント値を集約しました。", type="warning", duration=7)
-        } else {
-          merged_dt_processed_final <- merged_dt_processed
-        }
-        
-        rv$merged_data <- as.data.frame(merged_dt_processed_final)
-        message("--- rv$merged_data (", rv$current_gene_id_type(), "ベース) 作成完了. Dimensions: ", paste(dim(rv$merged_data), collapse="x"), " ---")
-        
-        ### ★ 追加 ★ rv$sample_metadataに 'active' 列を追加
+        # === 共通: サンプルメタデータ ===
+        current_samples <- setdiff(colnames(rv$merged_data), "Geneid")
         rv$sample_metadata <- data.frame(
-          id = paste0("sample_", 1:length(initial_sample_names)),
-          current_name = initial_sample_names,
-          group = rep("GroupA", length(initial_sample_names)),
-          active = rep(TRUE, length(initial_sample_names)), # デフォルトで全てアクティブ
+          id = paste0("sample_", 1:length(current_samples)),
+          current_name = current_samples,
+          group = rep("GroupA", length(current_samples)),
+          time = rep(0, length(current_samples)),
+          active = rep(TRUE, length(current_samples)),
           stringsAsFactors = FALSE
         )
-        
       }, error = function(e) {
-        error_msg <- paste("ファイル処理中にエラー:", e$message)
-        showNotification(error_msg, type = "error", duration = 15)
-        rv$merged_data <- NULL; rv$sample_metadata <- NULL;
-        rv$gene_lengths <- NULL; rv$filtered_keep <- NULL; rv$deg_results <- NULL
-        rv$background_genes_original <- NULL
-        validate(error_msg)
+        showNotification(paste("エラー:", e$message), type = "error", duration = 15)
+        rv$merged_data <- NULL; rv$sample_metadata <- NULL
       })
-      message("--- File Upload/Species Change Event End ---")
     })
     
+    # --- UI生成 ---
     output$sampleMetadataInput <- renderUI({
       if (is.null(rv$sample_metadata)) { return(tags$p("ファイルをアップロードしてください。")) }
       input_tags <- map(1:nrow(rv$sample_metadata), ~{
         sample_info <- rv$sample_metadata[.x, ]
-        tagList(
-          ### ★ 変更 ★ チェックボックスを追加し、レイアウトを調整
-          fluidRow(
-            column(3, checkboxInput(inputId = ns(paste0("active_sample_", sample_info$id)), 
-                                    label = "解析対象", 
-                                    value = sample_info$active)),
-            column(5, textInput(inputId = ns(paste0("sample_name_", sample_info$id)), 
-                                label = paste0("サンプル ", .x, " 名前"), 
-                                value = sample_info$current_name)),
-            column(4, textInput(inputId = ns(paste0("group_name_", sample_info$id)), 
-                                label = "グループ", 
-                                value = sample_info$group))
-          )
-        )
+        tagList(fluidRow(
+            column(2, checkboxInput(inputId = ns(paste0("active_sample_", sample_info$id)), label = "解析対象", value = sample_info$active)),
+            column(4, textInput(inputId = ns(paste0("sample_name_", sample_info$id)), label = paste0("サンプル ", .x, " 名前"), value = sample_info$current_name)),
+            column(3, textInput(inputId = ns(paste0("group_name_", sample_info$id)), label = "グループ", value = sample_info$group)),
+            column(3, numericInput(inputId = ns(paste0("time_", sample_info$id)), label = "Time", value = sample_info$time %||% 0, min = 0, step = 1))
+        ))
       })
       do.call(tagList, input_tags)
     })
     
+    # --- サンプル情報更新監視 ---
     observe({
-      # Reactive dependency on all relevant inputs
-      # This will trigger the debounced reactive when any of these change
       all_inputs <- reactive({
         req(rv$sample_metadata)
-        # Create a list of dependencies on all dynamic inputs
         lapply(1:nrow(rv$sample_metadata), function(i) {
-          sample_id <- rv$sample_metadata$id[i]
-          list(
-            input[[paste0("sample_name_", sample_id)]],
-            input[[paste0("group_name_", sample_id)]],
-            input[[paste0("active_sample_", sample_id)]]
-          )
+          sid <- rv$sample_metadata$id[i]
+          list(input[[paste0("sample_name_", sid)]], input[[paste0("group_name_", sid)]], input[[paste0("time_", sid)]], input[[paste0("active_sample_", sid)]])
         })
       })
-
-      # Debounce the reaction to input changes
-      debounced_inputs <- debounce(all_inputs, 500) # 500ms delay
-
+      debounced_inputs <- debounce(all_inputs, 500)
       observeEvent(debounced_inputs(), {
         req(rv$sample_metadata, rv$merged_data)
-
-        n_samples <- nrow(rv$sample_metadata)
-        new_names <- character(n_samples)
-        new_groups <- character(n_samples)
-        new_actives <- logical(n_samples)
-        valid_inputs <- TRUE
-
-        # Use isolated inputs to prevent re-triggering
+        n_s <- nrow(rv$sample_metadata); new_names <- character(n_s); new_grps <- character(n_s); new_times <- numeric(n_s); new_acts <- logical(n_s); valid <- TRUE
         isolate({
-          isolate_inputs <- reactiveValuesToList(input)
-          for (i in 1:n_samples) {
-            sample_id <- rv$sample_metadata$id[i]
-            name_val <- isolate_inputs[[paste0("sample_name_", sample_id)]]
-            group_val <- isolate_inputs[[paste0("group_name_", sample_id)]]
-            active_val <- isolate_inputs[[paste0("active_sample_", sample_id)]]
-
-            if (is.null(name_val) || is.null(group_val) || is.null(active_val)) {
-              valid_inputs <- FALSE
-              break
-            }
-            new_names[i] <- name_val
-            new_groups[i] <- group_val
-            new_actives[i] <- active_val
+          vals <- reactiveValuesToList(input)
+          for(i in 1:n_s){
+            sid <- rv$sample_metadata$id[i]
+            nm <- vals[[paste0("sample_name_", sid)]]; grp <- vals[[paste0("group_name_", sid)]]; tm <- vals[[paste0("time_", sid)]]; act <- vals[[paste0("active_sample_", sid)]]
+            if(is.null(nm)||is.null(grp)||is.null(tm)||is.null(act)||!is.numeric(tm)) { valid <- FALSE; break }
+            new_names[i] <- nm; new_grps[i] <- grp; new_times[i] <- tm; new_acts[i] <- act
           }
         })
-
-        if (valid_inputs) {
-          # Check for actual changes before updating
-          if (!identical(new_names, rv$sample_metadata$current_name) ||
-              !identical(new_groups, rv$sample_metadata$group) ||
-              !identical(new_actives, rv$sample_metadata$active)) {
-
-            unique_new_names <- make.unique(new_names)
-            if(any(unique_new_names != new_names)) {
-              showNotification("サンプル名に重複があったため変更されました。", type = "warning", duration = 5)
-              new_names <- unique_new_names
-              for(i_update in 1:n_samples) {
-                if (new_names[i_update] != isolate(input[[paste0("sample_name_", rv$sample_metadata$id[i_update])]])) {
-                  updateTextInput(session, paste0("sample_name_", rv$sample_metadata$id[i_update]), value = new_names[i_update])
-                }
-              }
-            }
-
-            if (!is.null(rv$merged_data) && ("Geneid" %in% colnames(rv$merged_data)) && (ncol(rv$merged_data) - 1 == length(new_names))) {
-              # Update metadata
-              rv$sample_metadata$current_name <- new_names
-              rv$sample_metadata$group <- new_groups
-              rv$sample_metadata$active <- new_actives
-
-              # Update merged_data column names
-              current_merged_data_colnames <- colnames(rv$merged_data)
-              new_colnames_for_merged <- c("Geneid", new_names)
-
-              if(!identical(current_merged_data_colnames, new_colnames_for_merged)) {
-                colnames(rv$merged_data) <- new_colnames_for_merged
-                message("--- サンプル名とグループ、active状態が更新されました ---")
-              } else {
-                message("--- サンプル情報（グループ or active状態）が更新されました ---")
-              }
+        if(valid){
+          if(!identical(new_names, rv$sample_metadata$current_name) || !identical(new_grps, rv$sample_metadata$group) || !identical(new_times, rv$sample_metadata$time) || !identical(new_acts, rv$sample_metadata$active)){
+            unq_nms <- make.unique(new_names)
+            if(any(unq_nms != new_names)){ showNotification("サンプル名重複修正", type="warning"); new_names <- unq_nms }
+            if(!is.null(rv$merged_data) && (ncol(rv$merged_data)-1 == length(new_names))){
+              rv$sample_metadata$current_name <- new_names; rv$sample_metadata$group <- new_grps; rv$sample_metadata$time <- new_times; rv$sample_metadata$active <- new_acts
+              colnames(rv$merged_data) <- c("Geneid", new_names)
             }
           }
         }
       })
     })
     
+    # --- デバッグ情報出力 ---
+    output$idConversionSummary <- renderPrint({
+      req(rv$conversion_debug_info)
+      df <- rv$conversion_debug_info()
+      if (is.null(df) || nrow(df) == 0) return("変換情報なし")
+      
+      n_total <- nrow(df)
+      n_success <- sum(df$Status == "Success")
+      n_failed <- sum(df$Status == "Failed")
+      
+      cat("Total IDs:", n_total, "\n")
+      cat("Success:", n_success, "(", round(n_success/n_total*100, 1), "%)\n")
+      cat("Failed:", n_failed, "(", round(n_failed/n_total*100, 1), "%)\n\n")
+      
+      if(n_failed > 0) {
+        cat("--- Failed IDs (Sample) ---\n")
+        print(head(df[df$Status == "Failed", "Original"], 10))
+        cat("\n(ヒント: これらのIDが正しいGene Symbolか、空白が含まれていないか確認してください。)\n")
+      }
+    })
+    
+    output$idConversionTable <- renderDT({
+      req(rv$conversion_debug_info)
+      datatable(rv$conversion_debug_info(), options = list(pageLength = 10, scrollX = TRUE), filter="top")
+    })
+    
+    # --- プロットなど ---
     plot_data <- reactive({
       req(rv$merged_data, rv$sample_metadata)
-      
-      ### ★ 変更 ★ アクティブなサンプルのみを対象にする
-      active_metadata <- rv$sample_metadata[rv$sample_metadata$active, , drop = FALSE]
-      validate(need(nrow(active_metadata) > 0, "プロット対象のサンプルがありません。少なくとも1つはチェックを入れてください。"))
-      
-      expected_sample_colnames <- active_metadata$current_name
-      
-      current_merged_data <- rv$merged_data
-      
-      cols_for_summing <- intersect(expected_sample_colnames, colnames(current_merged_data))
-      if(length(cols_for_summing) == 0) return(NULL)
-      numeric_data_for_summing <- current_merged_data[, cols_for_summing, drop = FALSE]
-      
-      are_numeric <- sapply(numeric_data_for_summing, is.numeric)
-      if(!all(are_numeric)) return(NULL)
-      total_reads_vector <- colSums(numeric_data_for_summing, na.rm = TRUE)
-      
-      if(length(total_reads_vector) == 0) return(NULL)
-      
-      reads_df <- data.frame(current_name = names(total_reads_vector), TotalReads = total_reads_vector, row.names = NULL, stringsAsFactors = FALSE)
-      
-      # active_metadataからプロット用のメタデータを取得
-      plot_metadata_df <- active_metadata[, c("current_name", "group"), drop = FALSE]
-      
-      combined_plot_data <- dplyr::left_join(reads_df, plot_metadata_df, by = "current_name")
-      
-      # 表示順を元のサンプル順に合わせる
-      ordered_levels <- intersect(active_metadata$current_name, combined_plot_data$current_name)
-      combined_plot_data$current_name <- factor(combined_plot_data$current_name, levels = ordered_levels)
-      
-      combined_plot_data <- combined_plot_data[!is.na(combined_plot_data$current_name), ]
-      if(nrow(combined_plot_data) == 0) return(NULL)
-      
-      return(combined_plot_data)
+      act_meta <- rv$sample_metadata[rv$sample_metadata$active, , drop=FALSE]
+      validate(need(nrow(act_meta) > 0, "プロット対象なし"))
+      cols <- intersect(act_meta$current_name, colnames(rv$merged_data))
+      if(length(cols) == 0) return(NULL)
+      num_dat <- rv$merged_data[, cols, drop=FALSE]
+      if(!all(sapply(num_dat, is.numeric))) return(NULL)
+      tot <- colSums(num_dat, na.rm=TRUE)
+      df <- data.frame(current_name = names(tot), TotalReads = tot, stringsAsFactors=FALSE)
+      df <- left_join(df, act_meta[, c("current_name", "group")], by="current_name")
+      df$current_name <- factor(df$current_name, levels = act_meta$current_name)
+      df
     })
-    
     output$librarySizePlot <- renderPlotly({
-      data_to_plot <- plot_data()
-      req(data_to_plot, nrow(data_to_plot) > 0)
-      
-      p <- plot_ly(data = data_to_plot, x = ~current_name, y = ~TotalReads, color = ~group, type = 'bar',
-                   text = ~paste("サンプル:", current_name, "<br>合計リード数:", format(TotalReads, big.mark = ",", scientific = FALSE), "<br>グループ:", group),
-                   hoverinfo = 'text') %>%
-        layout(
-          xaxis = list(title = "サンプル", tickangle = -45, categoryorder = "array", categoryarray = ~current_name),
-          yaxis = list(title = "合計リード数", tickformat = ','),
-          legend = list(title = list(text = '<b> グループ </b>')),
-          margin = list(b = 150)
-        )
-      return(p)
+      d <- plot_data(); req(d, nrow(d)>0)
+      plot_ly(d, x=~current_name, y=~TotalReads, color=~group, type='bar') %>% layout(margin=list(b=100))
     })
+    output$downloadRDS <- downloadHandler(filename=function(){paste0("session_", Sys.Date(), ".rds")}, content=function(f){saveRDS(reactiveValuesToList(rv), f)})
+    observeEvent(input$uploadRDS, { req(input$uploadRDS); d <- readRDS(input$uploadRDS$datapath); for(n in names(d)) if(n %in% names(rv)) rv[[n]] <- d[[n]] })
     
-    # --- セッションの保存 (RDS) ---
-    output$downloadRDS <- downloadHandler(
-      filename = function() {
-        paste0("shiny_session_", Sys.Date(), ".rds")
-      },
-      content = function(file) {
-        showNotification("セッションデータを準備しています...時間がかかる場合があります。",
-                         duration = NULL, id = "save_session_message", type = "message")
-        session_data <- reactiveValuesToList(rv)
-        saveRDS(session_data, file)
-        removeNotification("save_session_message")
-        showNotification("セッションの保存が完了しました。", type = "message")
-      }
-    )
-    
-    # --- セッションの復元 (RDS) ---
-    observeEvent(input$uploadRDS, {
-      rds_file <- input$uploadRDS
-      if (is.null(rds_file)) {
-        return(NULL)
-      }
-      showNotification("セッションファイルを読み込んでいます...", duration = 5, type = "message")
-      tryCatch({
-        loaded_session_data <- readRDS(rds_file$datapath)
-        loaded_names <- names(loaded_session_data)
-        current_rv_names <- names(reactiveValuesToList(rv))
-        for (name in loaded_names) {
-          if (name %in% current_rv_names) {
-            rv[[name]] <- loaded_session_data[[name]]
-          }
-        }
-        showNotification("セッションの復元が完了しました！各タブの表示が更新されるまでお待ちください。", type = "success", duration = 10)
-      }, error = function(e) {
-        showNotification(paste("セッションの復元に失敗しました:", e$message), type = "error", duration = 15)
-      })
-    })
-    
-    `%||%` <- function(a, b) {
-      if (!is.null(a)) a else b
-    }
-    
+    `%||%` <- function(a, b) if (!is.null(a)) a else b
   })
 }
