@@ -121,6 +121,7 @@ ui <- navbarPage(
                 fileInput("upload_gtf_t2", "Or Upload GTF (Drag & Drop)", accept = c(".gtf", ".gff", ".gff3", ".gz")),
                 h5("4. Settings"),
                 numericInput("threads", "Threads", value = 4, min = 1, max = 32),
+                checkboxInput("t2_run_falco", "Run FastQC (Falco) Pre/Post Trim", value = TRUE),
                 checkboxInput("t2_run_multiqc", "Run MultiQC Report", value = TRUE),
                 h5("5. Output Directory"),
                 shinyDirButton("output_dir_btn", "Select Output Folder", "Select folder for results"),
@@ -567,19 +568,51 @@ server <- function(input, output, session) {
 
         for (s in samples) {
             s_out <- file.path(output_base, s$name)
+            falco_dir <- file.path(s_out, "falco")
 
-            # 1. Fastp
+            # 1. Falco pre-trim QC
+            if (input$t2_run_falco) {
+                queue[[length(queue) + 1]] <- list(
+                    type = "falco",
+                    cmd  = run_falco(s$r1, falco_dir, s$name, "R1", "pre", input$threads),
+                    desc = paste("FastQC Pre R1:", s$name)
+                )
+                if (!is.null(s$r2)) {
+                    queue[[length(queue) + 1]] <- list(
+                        type = "falco",
+                        cmd  = run_falco(s$r2, falco_dir, s$name, "R2", "pre", input$threads),
+                        desc = paste("FastQC Pre R2:", s$name)
+                    )
+                }
+            }
+
+            # 2. Fastp (trim + QC)
             fastp_res <- run_fastp(s$r1, s$r2, s_out, s$name)
             queue[[length(queue) + 1]] <- list(
                 type = "fastp",
                 cmd = fastp_res$cmd,
-                desc = paste("QC (fastp):", s$name)
+                desc = paste("Trim (fastp):", s$name)
             )
 
-            # 2. Salmon or STAR
-            # Inputs are the CLEAN files from fastp inside s_out directory
+            # Paths to trimmed reads
             clean_r1 <- file.path(s_out, fastp_res$clean_r1)
             clean_r2 <- if (!is.null(fastp_res$clean_r2)) file.path(s_out, fastp_res$clean_r2) else NULL
+
+            # 3. Falco post-trim QC
+            if (input$t2_run_falco) {
+                queue[[length(queue) + 1]] <- list(
+                    type = "falco",
+                    cmd  = run_falco(clean_r1, falco_dir, s$name, "R1", "post", input$threads),
+                    desc = paste("FastQC Post R1:", s$name)
+                )
+                if (!is.null(clean_r2)) {
+                    queue[[length(queue) + 1]] <- list(
+                        type = "falco",
+                        cmd  = run_falco(clean_r2, falco_dir, s$name, "R2", "post", input$threads),
+                        desc = paste("FastQC Post R2:", s$name)
+                    )
+                }
+            }
 
             if (input$quant_method == "Salmon") {
                 salmon_wrapper_cmd <- run_salmon_quant(

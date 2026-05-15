@@ -17,6 +17,7 @@ DOCKER_IMG_SUBREAD <- "quay.io/biocontainers/subread:2.1.1--h577a1d6_0"
 DOCKER_IMG_CORSET <- "quay.io/biocontainers/corset:1.09--h9f5acd7_3"
 DOCKER_IMG_BUSCO <- "quay.io/biocontainers/busco:5.5.0--pyhdfd78af_0"
 DOCKER_IMG_MULTIQC <- "quay.io/biocontainers/multiqc:1.14--pyhdfd78af_0"
+DOCKER_IMG_FALCO   <- "quay.io/biocontainers/falco:1.2.5--h077b44d_0"
 
 # --- Helper Functions ---
 
@@ -530,7 +531,38 @@ run_busco <- function(fasta, lineage, output_dir, threads = 4) {
   return(run_args)
 }
 
-# 10. MultiQC
+# 10. Falco (FastQC-compatible QC)
+# reads: single file path (call separately for R1 and R2)
+# output_dir: host dir to write results into
+# sample_name, read_num ("R1"/"R2"), suffix ("pre"/"post") compose the subdir name
+run_falco <- function(reads, output_dir, sample_name, read_num = "R1", suffix = "pre", threads = 2) {
+  subdir <- file.path(output_dir, paste0(sample_name, "_", read_num, "_", suffix))
+  dir.create(subdir, recursive = TRUE, showWarnings = FALSE)
+
+  files <- list(
+    read    = get_abs_path(reads),
+    out_sub = get_abs_path(subdir)
+  )
+
+  mapping <- map_files_to_container(files)
+
+  cmd_args <- c(
+    "falco",
+    "--outdir", mapping$mapped_paths$out_sub,
+    "-t", as.character(threads),
+    mapping$mapped_paths$read
+  )
+
+  run_args <- build_docker_cmd(
+    image    = DOCKER_IMG_FALCO,
+    cmd_args = cmd_args,
+    mounts   = mapping$mounts,
+    platform = "linux/amd64"
+  )
+  return(run_args)
+}
+
+# 11. MultiQC
 run_multiqc <- function(target_dir, output_dir) {
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
