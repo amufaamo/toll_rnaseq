@@ -362,26 +362,19 @@ dataUploadMetadataServer <- function(id, rv) {
 
             rv$gene_lengths <- as.data.frame(processed_list[[1]][, .(Geneid, Length)][!duplicated(Geneid)])
 
-            # Aggregate counts by Geneid to prevent explosion in full_join
-            count_list <- map(processed_list, ~ .x[, .(Count = sum(Count, na.rm = TRUE)), by = Geneid])
-            merged_dt <- count_list[[1]]
-            setnames(merged_dt, "Count", initial_sample_names[1])
+            # Aggregate counts by Geneid (dplyr ensures unique Geneids per sample)
+            count_frames <- map2(processed_list, initial_sample_names, function(dt, sname) {
+              df <- as.data.frame(dt)[, c("Geneid", "Count")]
+              df %>%
+                group_by(Geneid) %>%
+                summarise(!!sname := sum(Count, na.rm = TRUE), .groups = "drop") %>%
+                as.data.frame()
+            })
 
-            if (length(count_list) > 1) {
-              merged_df <- as.data.frame(merged_dt)
-              for (i in 2:length(count_list)) {
-                curr <- count_list[[i]]
-                setnames(curr, "Count", initial_sample_names[i])
-                merged_df <- full_join(merged_df, as.data.frame(curr), by = "Geneid")
-              }
-              merged_dt <- as.data.table(merged_df)
-            }
-            for (col in setdiff(names(merged_dt), "Geneid")) data.table::set(merged_dt, which(is.na(merged_dt[[col]])), col, 0)
-
-            if (any(duplicated(merged_dt$Geneid))) {
-              merged_dt <- merged_dt[, lapply(.SD, sum, na.rm = TRUE), by = Geneid, .SDcols = setdiff(names(merged_dt), "Geneid")]
-            }
-            rv$merged_data <- as.data.frame(merged_dt)
+            # Merge all samples (base merge avoids many-to-many issues)
+            merged_df <- Reduce(function(a, b) merge(a, b, by = "Geneid", all = TRUE), count_frames)
+            merged_df[is.na(merged_df)] <- 0
+            rv$merged_data <- merged_df
 
             # === B. 結合済みマトリックス ===
           } else if (inputType == "merged") {
