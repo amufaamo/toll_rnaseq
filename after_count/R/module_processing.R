@@ -454,22 +454,12 @@ processingServer <- function(id, rv) {
     })
 
     # 遺伝子選択UIをサーバーサイドselectizeで動的に更新
-    # [Phase 1] wrapped via execute_command (op = "update_gene_choices")
     observeEvent(display_table_reactive(), {
       display_table <- display_table_reactive()
       if (is.data.frame(display_table) && nrow(display_table) > 0) {
         gene_id_col_name <- colnames(display_table)[1]
         available_genes <- sort(unique(na.omit(as.character(display_table[[gene_id_col_name]]))))
-        # Route UI update through the command layer so it is logged like any other op.
-        execute_command(
-          list(
-            op = "update_gene_choices",
-            input_id = "genes_to_plot",
-            gene_choices = as.character(available_genes),
-            source = "processing/display_table_reactive"
-          ),
-          rv, session
-        )
+        updateSelectizeInput(session, "genes_to_plot", choices = available_genes, server = TRUE)
       }
     })
 
