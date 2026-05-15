@@ -1,0 +1,27 @@
+# R
+.RData
+**/.RData
+.Rhistory
+**/.Rhistory
+.DS_Store
+.RDataTmp*
+*.Rproj.user
+.Rproj.user
+Rplots.pdf
+*.pdf
+
+# AI tool configs
+.claude/
+**/.claude/
+.codex
+**/.codex
+
+# Backup / frozen snapshots
+after_count_stable_2026-04-23/
+*.bak_*
+
+# Internal project tracking
+toll_project.md
+toll_log.md
+project.md
+manuscript_figures.md

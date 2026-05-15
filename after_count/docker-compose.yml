@@ -1,0 +1,14 @@
+services:
+  shiny_app:
+    build: .
+    image: amufaamo/toll_rnaseq_app:latest
+    container_name: toll_rnaseq_app
+    ports:
+      - "3840:3838"
+    volumes:
+      - ./:/srv/shiny-server/
+    environment:
+      # Phase 1: command log history dir (written through the mounted app dir so
+      # logs are visible on the host — works on Windows/Mac/Linux alike).
+      TOLL_HISTORY_DIR: /srv/shiny-server/history
+    restart: always
