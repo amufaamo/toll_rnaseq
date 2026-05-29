@@ -55,7 +55,17 @@ app_ui <- function(request) {
         mod_enrichment_ui("enrichment")
       ),
       nav_panel(
-        title = .nav_label("6", "Report", "file-earmark-text"),
+        title = .nav_label("6", "GSVA", "diagram-2"),
+        value = "gsva",
+        mod_gsva_ui("gsva")
+      ),
+      nav_panel(
+        title = .nav_label("7", "UpSet", "list-check"),
+        value = "upset",
+        mod_deg_multi_ui("upset")
+      ),
+      nav_panel(
+        title = .nav_label("8", "Report", "file-earmark-text"),
         value = "report",
         mod_report_ui("report")
       ),

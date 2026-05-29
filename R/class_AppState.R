@@ -54,6 +54,7 @@ AppState <- R6::R6Class(
         eda         = "pending",
         deg         = "pending",
         enrichment  = "pending",
+        gsva        = "pending",
         report      = "pending"
       ))
     },
@@ -103,6 +104,7 @@ AppState <- R6::R6Class(
         eda        = "pending",
         deg        = "pending",
         enrichment = "pending",
+        gsva       = "pending",
         report     = "pending"
       ))
       invisible(self)
