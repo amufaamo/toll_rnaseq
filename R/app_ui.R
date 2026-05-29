@@ -65,7 +65,12 @@ app_ui <- function(request) {
         mod_deg_multi_ui("upset")
       ),
       nav_panel(
-        title = .nav_label("8", "Report", "file-earmark-text"),
+        title = .nav_label("8", "Time-series", "activity"),
+        value = "timeseries",
+        mod_timeseries_ui("timeseries")
+      ),
+      nav_panel(
+        title = .nav_label("9", "Report", "file-earmark-text"),
         value = "report",
         mod_report_ui("report")
       ),

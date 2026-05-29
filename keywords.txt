@@ -1,0 +1,1 @@
+RNA-seq, GUI, Shiny, bioinformatics tools, reproducibility, Nextflow integration, asynchronous processing, data visualization, transcriptomics, open-source software

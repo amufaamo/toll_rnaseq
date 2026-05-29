@@ -55,6 +55,7 @@ AppState <- R6::R6Class(
         deg         = "pending",
         enrichment  = "pending",
         gsva        = "pending",
+        timeseries  = "pending",
         report      = "pending"
       ))
     },
