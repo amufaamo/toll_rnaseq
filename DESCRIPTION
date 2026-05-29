@@ -1,0 +1,46 @@
+Package: EasyRNASeq
+Title: A GUI Platform for RNA-seq Analysis
+Version: 4.0.0.9000
+Authors@R:
+    person(given = "Masakazu",
+           family = "Hasegawa",
+           role = c("aut", "cre"),
+           email = "amufaamo@gmail.com")
+Description: A Shiny application enabling wet-lab researchers to perform
+    RNA-seq analysis—from count matrix to publication-ready figures—through
+    a graphical interface. Key features include journal-ready figure export
+    (Nature/Cell/Science presets), asynchronous computation via ExtendedTask,
+    Nextflow pipeline integration, reproducible R script output, and
+    colorblind-safe defaults (Okabe-Ito palette).
+License: MIT + file LICENSE
+Imports:
+    config (>= 0.3.1),
+    golem (>= 0.4.0),
+    shiny (>= 1.8.0),
+    bslib (>= 0.7.0),
+    bsicons,
+    R6 (>= 2.5.0),
+    DT (>= 0.30),
+    ggplot2 (>= 3.5.0),
+    future (>= 1.33.0),
+    promises (>= 1.2.0),
+    qs2 (>= 0.1.0)
+Suggests:
+    DESeq2,
+    apeglm,
+    sva,
+    IHW,
+    ComplexHeatmap,
+    EnhancedVolcano,
+    clusterProfiler,
+    enrichplot,
+    GSVA,
+    CEMiTool,
+    ComplexUpset,
+    svglite (>= 2.1.0),
+    testthat (>= 3.0.0),
+    shinytest2
+Encoding: UTF-8
+LazyData: true
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
