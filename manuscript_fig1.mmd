@@ -1,0 +1,48 @@
+graph TD
+    classDef mainApp fill:#2d4263,stroke:#c84b31,stroke-width:2px,color:#fff;
+    classDef async fill:#ffb400,stroke:#c84b31,stroke-width:2px,color:#fff;
+    classDef data fill:#ecdbba,stroke:#e65100,stroke-width:2px,color:#333;
+    classDef backend fill:#e8f4f8,stroke:#0f3460,stroke-width:2px,color:#333;
+    
+    A1(Raw Reads<br>FASTQ files):::data --> N[Nextflow Pipeline]
+    
+    subgraph Upstream [Upstream Processing / HPC]
+        N -.->|Alignment| N1(STAR):::backend
+        N -.->|Quantification| N2(FeatureCounts):::backend
+        N -.->|QC| N3(MultiQC):::backend
+    end
+    
+    N1 & N2 --> A2(Count Matrix<br>CSV/TSV/RDS):::data
+    A2 --> App[EasyRNA-Seq v4.0<br>Shiny GUI]:::mainApp
+    
+    subgraph "golem R Package Architecture"
+        AppState[(AppState R6<br>State Management)]:::mainApp
+        
+        App --> Upload[Upload Module]
+        App --> QC[QC & Filter Module]
+        App --> EDA[EDA Module<br>PCA + Heatmap]
+        App --> DEG[DEG Module<br>DESeq2 + apeglm]
+        App --> Enrich[Enrichment Module<br>fgsea + clusterProfiler]
+        App --> GSVA[GSVA Module]
+        App --> UpSet[UpSet Module]
+        App --> Report[Report Module]
+        
+        Upload <--> AppState
+        QC <--> AppState
+        EDA <--> AppState
+        DEG <--> AppState
+        Enrich <--> AppState
+        GSVA <--> AppState
+        UpSet <--> AppState
+        Report <--> AppState
+        
+        DEG -.->|future/promises| Async[ExtendedTask<br>Async Computation]:::async
+        Enrich -.->|future/promises| Async
+        GSVA -.->|future/promises| Async
+    end
+    
+    EDA & DEG & Enrich & GSVA & UpSet --> Export[Journal-Ready Figures<br>PDF/SVG/TIFF<br>Nature/Cell/Science presets]:::data
+    Report --> HTML[HTML Report]:::data
+    App --> Script[Reproducible R Script]:::data
+    
+    class AppState,Upload,QC,EDA,DEG,Enrich,GSVA,UpSet,Report mainApp;
