@@ -2,6 +2,7 @@
 #'
 #' @param input,output,session Internal parameters for {shiny}. DO NOT REMOVE.
 #' @import shiny
+#' @importFrom bslib nav_select
 #' @noRd
 app_server <- function(input, output, session) {
 
@@ -39,7 +40,7 @@ app_server <- function(input, output, session) {
       badge_id  <- paste0("badge_", s)
       badge_val <- switch(status[[s]],
         done    = tags$span("Done",     class = "badge bg-success ms-1"),
-        running = tags$span("Running…", class = "badge bg-warning ms-1"),
+        running = tags$span("Running\u2026", class = "badge bg-warning ms-1"),
         NULL
       )
       output[[badge_id]] <- renderUI(badge_val)

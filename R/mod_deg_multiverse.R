@@ -33,6 +33,17 @@ mod_deg_multiverse_ui <- function(id) {
   )
 }
 
+#' Payload for one null-bootstrap replicate
+#'
+#' Only the fitted observed run and the call rule are shipped to the worker; the
+#' accumulated bootstrap results stay in the main session.
+#' @noRd
+.mv_boot_payload <- function(job) {
+  list(run = job$run, null_fit = job$null_fit, b = job$b,
+       seed = job$payload$seed, padj_cutoff = job$payload$padj_cutoff,
+       lfc_cutoff = job$payload$lfc_cutoff)
+}
+
 #' @noRd
 mod_deg_multiverse_server <- function(id, state) {
   moduleServer(id, function(input, output, session) {
@@ -86,7 +97,7 @@ mod_deg_multiverse_server <- function(id, state) {
         target = as.numeric(input$target_efdr))
       job(list(stage = "observed", payload = payload, boot = list()))
       state$deg_multiverse_progress(list(stage = "observed", completed = 0, total = payload$B,
-                                         message = "Running observed specification grid…"))
+                                         message = "Running observed specification grid\u2026"))
       mv_task$invoke("observed", payload)
     })
 
@@ -97,16 +108,16 @@ mod_deg_multiverse_server <- function(id, state) {
         active$run <- ans$run; active$null_fit <- ans$null_fit; active$stage <- "bootstrap"; active$b <- 1L
         job(active)
         state$deg_multiverse_progress(list(stage = "bootstrap", completed = 0, total = active$payload$B,
-                                           message = "Running null bootstrap 1…"))
-        mv_task$invoke("bootstrap", active)
+                                           message = "Running null bootstrap 1\u2026"))
+        mv_task$invoke("bootstrap", .mv_boot_payload(active))
       } else if (identical(active$stage, "bootstrap")) {
         active$boot[[active$b]] <- ans
         completed <- active$b
         if (completed < active$payload$B) {
           active$b <- completed + 1L; job(active)
           state$deg_multiverse_progress(list(stage = "bootstrap", completed = completed, total = active$payload$B,
-            message = paste("Running null bootstrap", active$b, "…")))
-          mv_task$invoke("bootstrap", active)
+            message = paste0("Running null bootstrap ", active$b, "\u2026")))
+          mv_task$invoke("bootstrap", .mv_boot_payload(active))
         } else {
           calibration <- .mv_efdr_curve(active$run, active$boot, active$payload$target)
           stability <- mv_attach_efdr(active$run$stability, calibration$curve, active$payload$target)
@@ -119,7 +130,8 @@ mod_deg_multiverse_server <- function(id, state) {
     })
     observe({
       req(mv_task$status() == "error")
-      showNotification(paste("Multiverse DEG error:", mv_task$result()$message), type = "error", duration = 12)
+      msg <- tryCatch({ mv_task$result(); "unknown error" }, error = conditionMessage)
+      showNotification(paste("Multiverse DEG error:", msg), type = "error", duration = 12)
       state$set_status("deg_multiverse", "pending")
       state$deg_multiverse_progress(list(stage = "error", completed = 0, total = 1, message = "Failed"))
     })

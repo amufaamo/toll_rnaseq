@@ -59,7 +59,7 @@ mod_deg_multi_server <- function(id, state) {
       sig_list <- Filter(function(g) length(g) > 0, sig_list)
 
       if (length(sig_list) < 2) {
-        showNotification("Need ≥2 contrasts with DEGs.", type = "warning")
+        showNotification("Need \u22652 contrasts with DEGs.", type = "warning")
         return()
       }
 
@@ -88,7 +88,7 @@ mod_deg_multi_server <- function(id, state) {
         # Fallback: intersection count bar chart
         mat$comb <- apply(mat[cnts], 1, function(x) {
           hits <- cnts[x == 1]
-          if (length(hits) == 0) NA else paste(sort(hits), collapse = " ∩ ")
+          if (length(hits) == 0) NA else paste(sort(hits), collapse = " \u2229 ")
         })
         mat <- mat[!is.na(mat$comb), ]
         counts <- sort(table(mat$comb), decreasing = TRUE)

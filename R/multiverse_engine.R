@@ -1,5 +1,4 @@
-#' Multiverse DEG engine -- pure compute functions
-#' @noRd
+# Multiverse DEG engine -- pure compute functions
 
 .mv_require <- function(pkg) {
   if (!requireNamespace(pkg, quietly = TRUE))

@@ -48,7 +48,7 @@ mod_gsva_server <- function(id, state) {
         pathways <- split(m_df$gene_symbol, m_df$gs_name)
         pathways <- lapply(pathways, function(g) intersect(g, rownames(mat)))
         pathways <- Filter(function(g) length(g) >= 10, pathways)
-        if (length(pathways) == 0) stop("No gene sets with ≥10 overlapping genes.")
+        if (length(pathways) == 0) stop("No gene sets with \u226510 overlapping genes.")
 
         param <- GSVA::gsvaParam(exprData = mat, geneSets = pathways)
         GSVA::gsva(param, verbose = FALSE)

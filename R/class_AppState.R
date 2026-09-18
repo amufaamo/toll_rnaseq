@@ -118,6 +118,7 @@ AppState <- R6::R6Class(
         deg_multiverse = "pending",
         enrichment = "pending",
         gsva       = "pending",
+        timeseries = "pending",
         report     = "pending"
       ))
       invisible(self)

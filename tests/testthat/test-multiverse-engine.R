@@ -1,23 +1,3 @@
-make_mv_counts <- function(seed = 20260918, n_genes = 1000, n_de = 120) {
-  set.seed(seed)
-  n_per_group <- 6L
-  means <- rlnorm(n_genes, log(100), 0.45)
-  lib <- rep(seq(0.8, 1.2, length.out = n_per_group), 2)
-  lfc <- numeric(n_genes)
-  if (n_de > 0) {
-    lfc[seq_len(n_de / 2)] <- 1.5
-    lfc[seq.int(n_de / 2 + 1, n_de)] <- -1.5
-  }
-  condition <- factor(rep(c("C", "T"), each = n_per_group))
-  mu <- outer(means, lib)
-  mu[, condition == "T"] <- mu[, condition == "T", drop = FALSE] * 2^lfc
-  counts <- matrix(rnbinom(length(mu), mu = as.vector(mu), size = 1 / 0.15), nrow = n_genes,
-                   dimnames = list(paste0("g", seq_len(n_genes)), paste0("s", seq_len(12))))
-  list(counts = counts,
-       metadata = data.frame(sample = colnames(counts), condition = condition),
-       null_genes = paste0("g", seq.int(n_de + 1, n_genes)))
-}
-
 make_efdr_fixture <- function() {
   # Synthetic multiverse outcomes: observed calls 10, 5, 2 and null calls 8, 3, 0.
   # This gives strictly decreasing raw eFDR 0.45, 0.40, 0.25 at tau 0, .5, 1.
@@ -73,6 +53,7 @@ test_that("stability algebra is signed and monotone in tau", {
 })
 
 test_that("full-model null reconstruction is exact on the DESeq2 count scale", {
+  skip_mv_deps()
   d <- make_mv_counts(n_genes = 160, n_de = 20)
   fit <- mv_fit_full_null(d$counts, d$metadata, "condition", "C", "T")
   expect_true(fit$reconstruction_ok)
@@ -81,6 +62,7 @@ test_that("full-model null reconstruction is exact on the DESeq2 count scale", {
 })
 
 test_that("multiverse engine is deterministic and produces a downstream contract", {
+  skip_mv_deps()
   d <- make_mv_counts(seed = 11, n_genes = 180, n_de = 30)
   a <- mv_run_multiverse(d$counts, d$metadata, "condition", "C", "T", B = 2, seed = 99,
                          include_apeglm = FALSE)
@@ -95,6 +77,7 @@ test_that("multiverse engine is deterministic and produces a downstream contract
 })
 
 test_that("pure null is conservative across fixed seeds", {
+  skip_mv_deps()
   # Three seeds allow rare discrete null excursions; <=2 calls is a practical bound for 180 genes/B=5.
   calls <- numeric(3); selected <- numeric(3); means <- numeric(3)
   for (i in seq_along(c(31, 32, 33))) {
@@ -112,6 +95,7 @@ test_that("pure null is conservative across fixed seeds", {
 })
 
 test_that("AppState can receive a multiverse result outside a Shiny server", {
+  skip_mv_deps()
   d <- make_mv_counts(seed = 44, n_genes = 160, n_de = 20)
   z <- mv_run_multiverse(d$counts, d$metadata, "condition", "C", "T", B = 1, seed = 7,
                          include_apeglm = FALSE)
@@ -125,6 +109,7 @@ test_that("AppState can receive a multiverse result outside a Shiny server", {
 })
 
 test_that("known-truth eFDR calibration regression", {
+  skip_mv_deps()
   # The FDP <= 0.20 tolerance did not expose the flattened-curve bug: it assesses
   # realised calls, not whether tau/eFDR ranking is internally calibrated.
   skip_if(Sys.getenv("EASYRNASEQ_RUN_SLOW") == "", "set EASYRNASEQ_RUN_SLOW=1 for B=50 validation")

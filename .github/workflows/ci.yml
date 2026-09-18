@@ -15,6 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       R_LIBS_USER: ~/.R/library
+      # Analysis packages live in Suggests and are installed selectively below.
+      _R_CHECK_FORCE_SUGGESTS_: "false"
+      # Not a CRAN package: the incoming check only reports the .9000
+      # development version suffix.
+      _R_CHECK_CRAN_INCOMING_: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,8 +40,8 @@ jobs:
       - name: Install dependencies
         run: |
           dir.create(Sys.getenv("R_LIBS_USER"), recursive = TRUE, showWarnings = FALSE)
-          install.packages(c("remotes", "rcmdcheck", "BiocManager"))
-          BiocManager::install(c("DESeq2", "clusterProfiler"), ask = FALSE, update = FALSE)
+          install.packages(c("remotes", "rcmdcheck", "testthat", "BiocManager"))
+          BiocManager::install(c("DESeq2", "edgeR", "apeglm", "clusterProfiler"), ask = FALSE, update = FALSE)
           remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"))
         shell: Rscript {0}
 

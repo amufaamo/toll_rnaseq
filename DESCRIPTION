@@ -1,5 +1,5 @@
-Package: EasyRNASeq
-Title: A GUI Platform for RNA-seq Analysis
+Package: MultiverseDEG
+Title: A GUI Platform for RNA-Seq Analysis
 Version: 4.0.0.9000
 Authors@R:
     person(given = "Masakazu",
@@ -7,11 +7,12 @@ Authors@R:
            role = c("aut", "cre"),
            email = "amufaamo@gmail.com")
 Description: A Shiny application enabling wet-lab researchers to perform
-    RNA-seq analysis—from count matrix to publication-ready figures—through
+    RNA-seq analysis, from count matrix to publication-ready figures, through
     a graphical interface. Key features include journal-ready figure export
     (Nature/Cell/Science presets), asynchronous computation via ExtendedTask,
-    Nextflow pipeline integration, reproducible R script output, and
-    colorblind-safe defaults (Okabe-Ito palette).
+    multiverse differential expression analysis with calibrated effective FDR,
+    reproducible R script output, and colorblind-safe defaults (Okabe-Ito
+    palette).
 License: MIT + file LICENSE
 Imports:
     config (>= 0.3.1),
@@ -24,22 +25,33 @@ Imports:
     ggplot2 (>= 3.5.0),
     future (>= 1.33.0),
     promises (>= 1.2.0),
-    qs2 (>= 0.1.0)
+    grDevices,
+    stats,
+    tools,
+    utils
 Suggests:
     DESeq2,
     edgeR,
     apeglm,
+    SummarizedExperiment,
     sva,
     IHW,
     ComplexHeatmap,
     EnhancedVolcano,
     clusterProfiler,
     enrichplot,
+    fgsea,
+    msigdbr,
+    maSigPro,
+    org.Hs.eg.db,
+    org.Mm.eg.db,
+    ggrepel,
     GSVA,
     CEMiTool,
     ComplexUpset,
     svglite (>= 2.1.0),
     testthat (>= 3.0.0),
+    later,
     shinytest2
 Encoding: UTF-8
 LazyData: true

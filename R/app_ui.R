@@ -12,7 +12,7 @@ app_ui <- function(request) {
     page_navbar(
       title = tags$span(
         tags$img(src = "www/favicon.ico", height = "24px", class = "me-2"),
-        "EasyRNA-Seq"
+        "MultiverseDEG"
       ),
       id = "main_nav",
       theme = .app_theme(),
@@ -121,6 +121,7 @@ app_ui <- function(request) {
 }
 
 #' Build a nav_panel title with step badge + Bootstrap icon
+#' @noRd
 .nav_label <- function(step, label, icon_name) {
   tags$span(
     tags$span(step, class = "badge bg-secondary me-1"),
@@ -147,6 +148,6 @@ golem_add_external_resources <- function() {
   add_resource_path("www", app_sys("app/www"))
   tags$head(
     favicon(),
-    bundle_resources(path = app_sys("app/www"), app_title = "EasyRNA-Seq")
+    bundle_resources(path = app_sys("app/www"), app_title = "MultiverseDEG")
   )
 }

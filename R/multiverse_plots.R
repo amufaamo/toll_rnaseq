@@ -1,5 +1,4 @@
-#' Multiverse DEG plots
-#' @noRd
+# Multiverse DEG plots
 
 #' Build an aligned per-gene specification curve
 #' @noRd

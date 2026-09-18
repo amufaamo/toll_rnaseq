@@ -61,11 +61,11 @@ mod_qc_server <- function(id, state) {
           column(4, value_box("Before filter", format(nrow(counts), big.mark=","),
                               bsicons::bs_icon("grid"), theme = "light")),
           column(4, value_box("After filter",
-                              if (!is.null(filtered)) format(nrow(filtered), big.mark=",") else "—",
+                              if (!is.null(filtered)) format(nrow(filtered), big.mark=",") else "\u2014",
                               bsicons::bs_icon("funnel-fill"),
                               theme = if (!is.null(filtered)) "success" else "light")),
           column(4, value_box("Removed",
-                              if (!is.null(filtered)) format(nrow(counts)-nrow(filtered), big.mark=",") else "—",
+                              if (!is.null(filtered)) format(nrow(counts)-nrow(filtered), big.mark=",") else "\u2014",
                               bsicons::bs_icon("trash"), theme = "light"))
         ),
         card(

@@ -54,4 +54,4 @@ COPY --from=builder /app /app
 EXPOSE 3838
 
 # Start the application
-CMD ["R", "-e", "options(shiny.port = 3838, shiny.host = '0.0.0.0'); EasyRNASeq::run_app()"]
+CMD ["R", "-e", "options(shiny.port = 3838, shiny.host = '0.0.0.0'); MultiverseDEG::run_app()"]

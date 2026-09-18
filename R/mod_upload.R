@@ -74,7 +74,7 @@ mod_upload_server <- function(id, state) {
         state$log_param("upload", "n_samples", ncol(mat))
         state$set_status("upload", "done")
         showNotification(
-          sprintf("Loaded %s genes × %s samples", nrow(mat), ncol(mat)),
+          sprintf("Loaded %s genes \u00d7 %s samples", nrow(mat), ncol(mat)),
           type = "message", duration = 4
         )
       }

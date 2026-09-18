@@ -22,7 +22,7 @@ mod_timeseries_ui <- function(id) {
         card_body(
           numericInput(ns("degree"),      "Polynomial degree",  2,    min=1, max=3),
           numericInput(ns("q_thr"),       "Q-value cutoff",     0.05, min=0, max=1, step=0.01),
-          numericInput(ns("rsq"),         "R² cutoff",          0.7,  min=0, max=1, step=0.05),
+          numericInput(ns("rsq"),         "R\u00b2 cutoff",          0.7,  min=0, max=1, step=0.05),
           numericInput(ns("top_n_plot"),  "Top genes to plot",  9,    min=1, max=25),
           input_task_button(ns("run_masigpro"), "Run maSigPro",
                             icon  = icon("play"),
@@ -133,7 +133,7 @@ mod_timeseries_server <- function(id, state) {
       req(ts_res())
       res   <- ts_res()
       if (res$n_sig == 0 || is.null(res$sigs))
-        return(.ts_msg("No significant genes. Try relaxing Q-value or R² cutoff."))
+        return(.ts_msg("No significant genes. Try relaxing Q-value or R\u00b2 cutoff."))
 
       sigs    <- res$sigs
       expr    <- res$expr
@@ -141,7 +141,7 @@ mod_timeseries_server <- function(id, state) {
       n_top   <- min(isolate(input$top_n_plot), res$n_sig, nrow(expr))
 
       sig_names <- rownames(sigs$summary)[sigs$summary[,1] != ""]
-      if (length(sig_names) == 0) return(.ts_msg("No genes passed the R² filter."))
+      if (length(sig_names) == 0) return(.ts_msg("No genes passed the R\u00b2 filter."))
       top_genes <- head(sig_names, n_top)
 
       df <- do.call(rbind, lapply(top_genes, function(g) {

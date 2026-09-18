@@ -1,7 +1,43 @@
+# RStudio / project scaffolding
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^\.vscode$
+^\.here$
 ^data-raw$
-dev_history.R
+
+# golem dev scaffolding
 ^dev$
+dev_history\.R
 $run_dev.*
-^.here$
+
+# CI, containers, tooling configs
+^\.github$
+^\.antigravitycli$
+^\.claude$
+^\.codex$
+^Dockerfile$
+^\.dockerignore$
+
+# Legacy v3 application and frozen snapshots (not part of the v4 package)
+^app\.R$
+^after_count$
+^before_count$
+^R_v3_backup$
+^install_pkg\.R$
+^reprex_heatmap\.R$
+^scripts$
+
+# Design notes, manuscript sources and other non-package documents
+^docs$
+^REBUILD_HANDOFF\.md$
+^functional_spec\.md$
+^manuscript_.*$
+^cover_letter\.md$
+^figure_legends\.md$
+^submission_checklist\.md$
+^keywords\.txt$
+^fig4_benchmark\.pdf$
+
+# Bundled example data (distributed via the repository, not the tarball)
+^cd4_cd14\.tsv$
+^LICENSE\.md$

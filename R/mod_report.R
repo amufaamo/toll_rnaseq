@@ -96,7 +96,7 @@ mod_report_server <- function(id, state) {
         cat("No parameters logged yet. Run analyses first.\n")
         return(invisible(NULL))
       }
-      cat("=== EasyRNA-Seq Analysis Parameters ===\n")
+      cat("=== MultiverseDEG Analysis Parameters ===\n")
       cat(sprintf("Generated: %s\n\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
       prev_step <- ""
       for (nm in names(log)) {
@@ -111,7 +111,7 @@ mod_report_server <- function(id, state) {
 
     # ── R Script download ─────────────────────────────────────────────────────
     output$dl_rscript <- downloadHandler(
-      filename = "EasyRNASeq_analysis.R",
+      filename = "MultiverseDEG_analysis.R",
       content  = function(file) {
         log <- state$params_log()
         preset_dims <- list(
@@ -125,20 +125,20 @@ mod_report_server <- function(id, state) {
 
         lines <- c(
           "# ============================================================",
-          "# EasyRNA-Seq v4.0 — Reproducible R Script",
+          "# MultiverseDEG v4.0 \u2014 Reproducible R Script",
           paste0("# Generated : ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
           paste0("# Journal   : ", input$fig_preset),
           "# ============================================================",
           "",
           "library(DESeq2)",
           "library(ggplot2)",
-          if (isTRUE("apeglm" %in% rownames(installed.packages()))) "library(apeglm)",
+          if (requireNamespace("apeglm", quietly = TRUE)) "library(apeglm)",
           "",
-          "# ── Load data ──────────────────────────────────────────────────",
+          "# -- Load data --------------------------------------------------",
           '# counts  <- read.csv("counts.csv", row.names=1, check.names=FALSE)',
           '# metadata <- read.csv("metadata.csv")',
           "",
-          "# ── Parameters ─────────────────────────────────────────────────"
+          "# -- Parameters -------------------------------------------------"
         )
 
         for (nm in names(log)) {
@@ -156,14 +156,14 @@ mod_report_server <- function(id, state) {
         test  <- deg_params[["deg.test_level"]]$value    %||% "treated"
 
         lines <- c(lines, "",
-          "# ── DESeq2 ─────────────────────────────────────────────────────",
+          "# -- DESeq2 -----------------------------------------------------",
           sprintf('meta$%s <- relevel(factor(meta$%s), ref = "%s")', cond, cond, ref),
           sprintf('dds <- DESeqDataSetFromMatrix(countData=counts, colData=meta, design=~%s)', cond),
           "dds <- DESeq(dds)",
           sprintf('res <- lfcShrink(dds, coef="%s_%s_vs_%s", type="apeglm")', cond, test, ref),
           "res_df <- as.data.frame(res)",
           "",
-          "# ── Volcano plot ────────────────────────────────────────────────",
+          "# -- Volcano plot ------------------------------------------------",
           "res_df$sig <- ifelse(!is.na(res_df$padj) & res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 1,",
           "                     ifelse(res_df$log2FoldChange > 0, 'Up', 'Down'), 'NS')",
           "p_volcano <- ggplot(res_df, aes(log2FoldChange, -log10(padj), color=sig)) +",
@@ -181,7 +181,7 @@ mod_report_server <- function(id, state) {
 
     # ── HTML Report download ──────────────────────────────────────────────────
     output$dl_report <- downloadHandler(
-      filename = paste0("EasyRNASeq_report_",
+      filename = paste0("MultiverseDEG_report_",
                         format(Sys.time(), "%Y%m%d_%H%M%S"), ".html"),
       content  = function(file) {
         # Build inline HTML report (no Quarto/rmarkdown dependency)
@@ -203,7 +203,7 @@ mod_report_server <- function(id, state) {
           ".badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:11px}",
           ".done{background:#18BC9C;color:white}.pending{background:#ccc;color:#555}",
           "</style></head><body>",
-          "<h1>EasyRNA-Seq v4.0 — Analysis Report</h1>",
+          "<h1>MultiverseDEG v4.0 \u2014 Analysis Report</h1>",
           sprintf("<p>Generated: %s</p>", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
           "<hr>"
         )

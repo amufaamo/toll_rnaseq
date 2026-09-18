@@ -1,4 +1,4 @@
-# Multiverse DEG analysis — design for EasyRNA-Seq v4
+# Multiverse DEG analysis — design for MultiverseDEG v4
 
 ## 1. Motivation and positioning
 
@@ -36,7 +36,7 @@ The full default is
 
 This is a product over legal family-specific choices, not a false Cartesian product. The UI displays its count, warns above 100, and refuses more than 200 specifications in the MVP. A later option may sample uniformly within filter × covariate × method-family strata, retain inclusion probabilities, and use inverse-probability weights. This is unbiased for the declared full-grid average conditional on fixed selections, but increases variance and is not default.
 
-The Phase-2 MVP preset is 16 paths: two filters (10 in the smaller group and filterByExpr) × two covariate states × four method paths (DESeq2 Wald unshrunk; DESeq2 Wald apeglm if available; edgeR QL/TMM; edgeR LRT/TMM). If apeglm is absent, that arm is visibly omitted and the count changes.
+The Phase-2 MVP preset is two filters (10 in the smaller group and filterByExpr) × four method paths (DESeq2 Wald unshrunk; DESeq2 Wald apeglm if available; edgeR QL/TMM; edgeR LRT/TMM) × covariate arms. The covariate axis is conditional, not a fixed 2: with no covariate column selected there is nothing to toggle, so `mv_build_specifications()` emits a single covariate arm (`NA`), giving **8 paths**. Selecting a covariate column adds a second arm (with/without that covariate in the design), giving **16 paths** (rank-deficient covariate/condition combinations are pruned from that 16, per the table below). If apeglm is absent, the shrinkage arm is visibly omitted and both counts drop by one method path (8→6, 16→12).
 
 Padj and absolute-LFC rules are not multiplicative DE-fit axes. Every fit stores LFC, p-value, and BH padj. The supported no-refit call-rule grid is padj 0.01/0.05/0.10 × absolute LFC 0/0.5/1; bootstrap curves are stored for every selected pair. An arbitrary display-only threshold receives a not-bootstrap-calibrated badge.
 
@@ -153,11 +153,11 @@ app_server.R renders badge_step outputs but .nav_label has no matching uiOutput 
 
 ## 8. Cost, scheduling, caching
 
-Fits are approximately (B+1)|S| plus null fitting/simulation. A measured local toll benchmark on simulated 20,000 × 12 counts: DESeq2 4.35 s, edgeR QL 2.54 s, limma-voom 0.60 s elapsed. This is hardware/data dependent. Full 80 paths/B=100 is 8,080 fits, about 5.6 CPU-hours at a 2.5-s mixed mean. MVP 16 paths/B=20 is 336 fits (~14 serial CPU-minutes); B=100 ~45 minutes.
+Fits are approximately (B+1)|S| plus null fitting/simulation. A measured local toll benchmark on simulated 20,000 × 12 counts: DESeq2 4.35 s, edgeR QL 2.54 s, limma-voom 0.60 s elapsed. This is hardware/data dependent. Full 80 paths/B=100 is 8,080 fits, about 5.6 CPU-hours at a 2.5-s mixed mean. At that same ~2.5-s mixed mean: MVP without a covariate (8 paths)/B=20 is 168 fits (~7 serial CPU-minutes), MVP with a covariate (16 paths)/B=20 is 336 fits (~14 serial CPU-minutes); B=100 scales those to ~35 and ~45 minutes respectively. The synthetic validation run reported in §9/the manuscript used the no-covariate, 8-path grid.
 
 Use the existing ExtendedTask plus promises future_promise idiom per bounded batch, not one opaque multiverse promise. A batch returns plain partial arrays/counts; its main-session callback merges it, updates deg_multiverse_progress, and queues the next batch. Suggested units: four observed specs, then one bootstrap replicate × four specs. Workers never call reactive APIs.
 
-Do not set a private future plan in this module. Honour the app plan; app startup may set one shared future multisession plan via explicit EasyRNASeq.future_workers (default max(1, availableCores()-1)). Limit in-flight batches to that count and disable package-internal parallelism, preventing conflicts with existing async modules.
+Do not set a private future plan in this module. Honour the app plan; app startup may set one shared future multisession plan via explicit MultiverseDEG.future_workers (default max(1, availableCores()-1)). Limit in-flight batches to that count and disable package-internal parallelism, preventing conflicts with existing async modules.
 
 Cache a run hash of counts/metadata identity, contrast, options, package versions, seed. Changing tau, a supported call rule, table sort, or selected gene does no DE fit: re-threshold observed stats and look up bootstrap curves. Changing filter/method/covariate/B/seed creates a new run.
 

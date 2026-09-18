@@ -1,4 +1,4 @@
 library(testthat)
-library(EasyRNASeq)
+library(MultiverseDEG)
 
-test_check("EasyRNASeq")
+test_check("MultiverseDEG")

@@ -47,7 +47,7 @@ usethis::use_test("app")
 # Documentation
 
 ## Vignette ----
-usethis::use_vignette("EasyRNASeq")
+usethis::use_vignette("MultiverseDEG")
 devtools::build_vignettes()
 
 ## Code Coverage----

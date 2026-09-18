@@ -36,7 +36,7 @@ mod_enrichment_ui <- function(id) {
                                     "Reactome"               = "C2_CP_REACTOME")),
             selectInput(ns("rank_by"), "Rank metric",
                         choices = c("stat (Wald statistic)" = "stat",
-                                    "-log10(padj) × sign(LFC)" = "signed_log10p")),
+                                    "-log10(padj) \u00d7 sign(LFC)" = "signed_log10p")),
             numericInput(ns("n_perm"), "Permutations", 1000, min = 100, step = 500),
             numericInput(ns("gsea_padj"), "FDR cutoff", 0.25, min = 0, max = 1, step = 0.05)
           )
