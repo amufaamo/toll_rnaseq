@@ -234,7 +234,7 @@ timeseriesAnalysisServer <- function(id, rv) {
       req(results$sig_genes)
       # $summaryはリストかもしれないので、data.frameに変換
       summary_df <- as.data.frame(do.call(rbind, results$sig_genes$summary))
-      DT::datatable(summary_df, options = list(scrollX = TRUE, pageLength = 10), rownames = TRUE)
+      DT::datatable(summary_df, style = "bootstrap5", class = "table-hover table-sm", options = list(scrollX = TRUE, pageLength = 10), rownames = TRUE)
     })
     
     output$maSigPro_summary <- renderPrint({

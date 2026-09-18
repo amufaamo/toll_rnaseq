@@ -86,10 +86,46 @@ detect_gene_id_type <- function(ids) {
   return("UNKNOWN")
 }
 
+infer_species_from_gene_ids <- function(ids) {
+  ids_clean <- na.omit(as.character(ids[ids != "" & !is.na(ids)]))
+  if (length(ids_clean) == 0) {
+    return(NULL)
+  }
+  n_sample <- min(length(ids_clean), 1000)
+  ids_sample <- sample(ids_clean, n_sample)
+  species_patterns <- c(
+    "Mus_musculus" = "^ENSMUSG",
+    "Homo_sapiens" = "^ENSG",
+    "Rattus_norvegicus" = "^ENSRNOG"
+  )
+  match_rates <- vapply(species_patterns, function(pattern) {
+    mean(grepl(pattern, ids_sample, ignore.case = TRUE))
+  }, numeric(1))
+  best_match <- names(which.max(match_rates))
+  if (length(best_match) == 1 && match_rates[[best_match]] > 0.8) {
+    return(best_match)
+  }
+  NULL
+}
+
 # ★★★ 修正: エイリアス検索を追加した関数 ★★★
 convert_or_pass_ids <- function(original_ids, detected_keytype, selected_species_code) {
   if (selected_species_code == "Others_Original") {
     return(list(processed_ids = as.character(original_ids), failed_indices = rep(FALSE, length(original_ids)), failed_count = 0, final_id_type = detected_keytype %||% "ORIGINAL_UNCONVERTED", conversion_map = NULL))
+  }
+  if (selected_species_code == "Lotus_japonicus") {
+    lotus_entrez <- gsub("^LOC", "", as.character(original_ids))
+    debug_map <- data.frame(
+      Original = as.character(original_ids),
+      Converted = lotus_entrez,
+      Status = "Success",
+      stringsAsFactors = FALSE
+    )
+    return(list(processed_ids = lotus_entrez,
+                failed_indices = rep(FALSE, length(original_ids)),
+                failed_count = 0,
+                final_id_type = "ENTREZID",
+                conversion_map = debug_map))
   }
   if (detected_keytype == "ENTREZID") {
     return(list(processed_ids = as.character(original_ids), failed_indices = rep(FALSE, length(original_ids)), failed_count = 0, final_id_type = "ENTREZID", conversion_map = NULL))
@@ -178,6 +214,26 @@ convert_or_pass_ids <- function(original_ids, detected_keytype, selected_species
   ))
 }
 
+# --- Helper function: Auto-detect file format ---
+detect_file_format <- function(files_info) {
+  if (is.null(files_info) || nrow(files_info) == 0) return(NULL)
+  if (nrow(files_info) > 1) return("individual")
+
+  fpath <- files_info$datapath[1]
+  fname <- files_info$name[1]
+  ext <- tolower(tools::file_ext(fname))
+  sep_char <- if (ext == "csv") "," else "\t"
+
+  lines <- tryCatch(readLines(fpath, n = 10, warn = FALSE), error = function(e) character(0))
+  data_lines <- lines[!grepl("^#", lines) & nchar(trimws(lines)) > 0]
+  if (length(data_lines) == 0) return("individual")
+
+  cols <- trimws(strsplit(data_lines[1], sep_char)[[1]])
+  featurecounts_markers <- c("Chr", "Start", "End", "Strand", "Length")
+  if (any(featurecounts_markers %in% cols)) return("individual")
+  return("merged")
+}
+
 # --- Helper function: Trim common strings ---
 # (変更なし)
 find_lcp <- function(strs) {
@@ -249,6 +305,39 @@ dataUploadMetadataUI <- function(id) {
       h4(icon("paw"), "2. 生物種選択"),
       selectInput(ns("species"), label = "解析対象の生物種またはID処理方法:", choices = species_choices_ui, selected = "Homo_sapiens"),
       hr(),
+      h4(icon("dna"), "2b. GTF/GFF アノテーション (任意)"),
+      fileInput(ns("gtfFile"), "GTF / GFF3 ファイル", multiple = FALSE,
+                accept = c(".gtf", ".gff", ".gff3", ".gz")),
+      helpText(icon("info-circle"), " OrgDbの無い生物種でも gene_id→Gene Symbol 変換、遺伝子長によるTPM/FPKM、biotypeフィルタが可能になります。カウントファイルと同じ参照GTFを指定してください。"),
+      uiOutput(ns("gtfStatusUI")),
+      hr(),
+      h4(icon("project-diagram"), "2c. カスタムアノテーション (任意)"),
+      fileInput(ns("customAnnotationFile"), "eggNOG-mapper アノテーション (.emapper.annotations)", multiple = FALSE, accept = c(".annotations", ".txt", ".tsv")),
+      helpText(icon("info-circle"), " 非モデル生物でGO / KEGG / GSEA解析を行う場合にアップロードしてください。"),
+      uiOutput(ns("customAnnotationStatusUI")),
+      hr(),
+      h4(icon("sitemap"), "2d. 非モデル生物の GO 注釈 (OrgDbが無い生物用)"),
+      helpText(icon("info-circle"), " OrgDbの無い生物でGOエンリッチメントを行うための注釈です。下のいずれかで設定できます（同梱済みの生物は不要）。"),
+      # --- 方法A: Tax ID を入れるだけで自動取得 (コマンド不要) ---
+      tags$b("方法A: NCBI Tax ID から自動取得"),
+      div(class = "input-group",
+        textInput(ns("taxIdInput"), NULL, value = "", placeholder = "例: 34305 (ミヤコグサ)"),
+      ),
+      actionButton(ns("fetchGene2go"), "この生物のGO注釈を取得", icon = icon("download"), class = "btn btn-primary btn-sm w-100"),
+      helpText(icon("info-circle"), " NCBIのGO注釈を取得します。NCBI Taxonomyで種名検索→Tax ID。",
+               tags$b("初回のみ約1.3GBのDB取得で数分かかります"), "（以降は即時／同梱生物は不要）。"),
+      br(),
+      # --- 方法B: gene2go ファイルを手動アップロード (上級者向け) ---
+      tags$details(
+        tags$summary("方法B: gene2go ファイルを手動アップロード (上級者向け)"),
+        fileInput(ns("gene2goFile"), "gene2go ファイル (GeneID, GO, [Term], [Category] 列)", multiple = FALSE,
+                  accept = c(".tsv", ".txt", ".csv", ".gz")),
+        helpText(icon("info-circle"), " NCBI gene2go形式（タブ区切り; 列: GeneID, GO, 任意でTerm/Category=Process/Function/Component）。GeneIDはカウント行列の遺伝子IDと一致させてください。")
+      ),
+      uiOutput(ns("gene2goStatusUI")),
+      textInput(ns("keggOrgCode"), "KEGG生物種コード (任意, 例: lja)", value = "", placeholder = "lja"),
+      helpText(icon("info-circle"), " KEGGがサポートする生物種コードを指定すると、その生物でKEGGパスウェイ解析が可能になります（オンライン取得）。"),
+      hr(),
       h4(icon("save"), "3. セッション管理"),
       downloadButton(ns("downloadRDS"), "セッション保存"),
       br(), br(),
@@ -291,21 +380,271 @@ dataUploadMetadataServer <- function(id, rv) {
     rv$current_gene_id_type <- reactiveVal("ENTREZID")
     rv$conversion_debug_info <- reactiveVal(NULL) # デバッグ情報用
 
+    # --- GTF/GFF アノテーション ---
+    gtf_raw <- reactiveVal(NULL)  # data.frame(gene_id, gene_name, biotype, gene_length)
+    observeEvent(input$gtfFile, {
+      req(input$gtfFile)
+      withProgress(message = "GTF/GFFを解析中...", value = 0.5, {
+        ann <- tryCatch(parse_gtf_annotation(input$gtfFile$datapath), error = function(e) {
+          showNotification(paste("GTF解析エラー:", e$message), type = "error", duration = 15)
+          NULL
+        })
+        gtf_raw(ann)
+        if (!is.null(ann)) {
+          # GTFの中身から「表示する遺伝子IDタイプ」の選択肢と既定値を決定し、
+          # 各タブ(DEG / GO)のドロップダウンへ反映できるよう rv に格納する。
+          rv$gtf_id_choices <- gtf_display_id_choices(ann)
+          sel_label <- names(rv$gtf_id_choices$choices)[
+            rv$gtf_id_choices$choices == rv$gtf_id_choices$selected][1]
+          showNotification(paste0("GTF読み込み完了: ", nrow(ann),
+                                  " 遺伝子のアノテーションを取得しました。表示IDタイプを「",
+                                  sel_label, "」に自動設定しました。"),
+                           type = "message", duration = 8)
+        } else {
+          rv$gtf_id_choices <- NULL
+        }
+      })
+    })
+
+    output$gtfStatusUI <- renderUI({
+      ann <- gtf_raw()
+      if (is.null(ann)) return(NULL)
+      n_len <- sum(!is.na(ann$gene_length))
+      n_bt  <- length(unique(ann$biotype[ann$biotype != "unknown"]))
+      tags$div(class = "alert alert-success", style = "padding: 8px; font-size: 0.85rem;",
+        icon("check-circle"),
+        HTML(paste0(" GTF適用中: <b>", nrow(ann), "</b> 遺伝子 / 遺伝子長 <b>", n_len,
+                    "</b> 件 / biotype <b>", n_bt, "</b> 種類"))
+      )
+    })
+
+    # --- Custom Annotation (eggNOG-mapper) ---
+    observeEvent(input$customAnnotationFile, {
+      req(input$customAnnotationFile)
+      withProgress(message = "カスタムアノテーションを解析中...", value = 0.5, {
+        tryCatch({
+          # Read file, skipping comments
+          lines <- readLines(input$customAnnotationFile$datapath)
+          data_lines <- lines[!grepl("^##", lines)]
+          # Find the header line, it starts with #query
+          header_idx <- which(grepl("^#query", data_lines))
+          if (length(header_idx) > 0) {
+            data_lines[header_idx] <- sub("^#", "", data_lines[header_idx])
+          }
+          
+          df <- read.table(text = data_lines, header = TRUE, sep = "\t", quote = "", stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
+          
+          if (!"query" %in% colnames(df)) {
+            stop("eggNOG-mapperのフォーマットとして認識できませんでした ('query' 列が見つかりません)。")
+          }
+          
+          # Parse GO
+          go_t2g <- NULL
+          if ("GOs" %in% colnames(df)) {
+            go_list <- lapply(1:nrow(df), function(i) {
+              gos <- df$GOs[i]
+              if (!is.na(gos) && gos != "" && gos != "-") {
+                data.frame(term = trimws(strsplit(gos, ",")[[1]]), gene = df$query[i], stringsAsFactors = FALSE)
+              } else {
+                NULL
+              }
+            })
+            go_t2g <- do.call(rbind, go_list)
+            if (!is.null(go_t2g) && nrow(go_t2g) > 0) go_t2g <- unique(go_t2g)
+          }
+          
+          # Parse KO
+          ko_t2g <- NULL
+          if ("KEGG_ko" %in% colnames(df)) {
+            ko_list <- lapply(1:nrow(df), function(i) {
+              kos <- df$KEGG_ko[i]
+              if (!is.na(kos) && kos != "" && kos != "-") {
+                kos_split <- strsplit(kos, ",")[[1]]
+                kos_split <- gsub("^ko:", "", kos_split)
+                data.frame(term = trimws(kos_split), gene = df$query[i], stringsAsFactors = FALSE)
+              } else {
+                NULL
+              }
+            })
+            ko_t2g <- do.call(rbind, ko_list)
+            if (!is.null(ko_t2g) && nrow(ko_t2g) > 0) ko_t2g <- unique(ko_t2g)
+          }
+          
+          # Parse KEGG Pathway
+          pathway_t2g <- NULL
+          if ("KEGG_Pathway" %in% colnames(df)) {
+            pathway_list <- lapply(1:nrow(df), function(i) {
+              pws <- df$KEGG_Pathway[i]
+              if (!is.na(pws) && pws != "" && pws != "-") {
+                pws_split <- strsplit(pws, ",")[[1]]
+                data.frame(term = trimws(pws_split), gene = df$query[i], stringsAsFactors = FALSE)
+              } else {
+                NULL
+              }
+            })
+            pathway_t2g <- do.call(rbind, pathway_list)
+            if (!is.null(pathway_t2g) && nrow(pathway_t2g) > 0) pathway_t2g <- unique(pathway_t2g)
+          }
+          
+          rv$custom_annotations <- list(
+            go_t2g = go_t2g,
+            ko_t2g = ko_t2g,
+            pathway_t2g = pathway_t2g
+          )
+          
+          showNotification("カスタムアノテーションの読み込みに成功しました。", type = "message", duration = 6)
+        }, error = function(e) {
+          showNotification(paste("カスタムアノテーション読み込みエラー:", e$message), type = "error", duration = 15)
+          rv$custom_annotations <- NULL
+        })
+      })
+    })
+    
+    output$customAnnotationStatusUI <- renderUI({
+      ca <- rv$custom_annotations
+      if (is.null(ca)) return(NULL)
+      go_n <- if(!is.null(ca$go_t2g)) nrow(ca$go_t2g) else 0
+      ko_n <- if(!is.null(ca$ko_t2g)) nrow(ca$ko_t2g) else 0
+      pw_n <- if(!is.null(ca$pathway_t2g)) nrow(ca$pathway_t2g) else 0
+      
+      tags$div(class = "alert alert-success", style = "padding: 8px; font-size: 0.85rem;",
+        icon("check-circle"),
+        HTML(paste0(" カスタムアノテーション適用中: <br>GO: <b>", go_n, "</b> 件, KO: <b>", ko_n, "</b> 件, Pathway: <b>", pw_n, "</b> 件"))
+      )
+    })
+
+    # --- 方法A: Tax ID から NCBI gene2go を自動取得 (コマンド不要) ---
+    observeEvent(input$fetchGene2go, {
+      tax <- trimws(input$taxIdInput %||% "")
+      if (!grepl("^[0-9]+$", tax)) {
+        showNotification("Tax ID を数値で入力してください (例: ミヤコグサ=34305)。", type = "error", duration = 8)
+        return(NULL)
+      }
+      withProgress(message = "GO注釈を取得中...", value = 0.05, {
+        tryCatch({
+          df <- fetch_gene2go_by_taxid(tax, progress = function(f, m) setProgress(value = f, message = m))
+          rv$gene2go_annotation <- df
+          showNotification(paste0("GO注釈取得完了 (Tax ID ", tax, "): ", nrow(df), " 注釈 / 遺伝子 ",
+                                  length(unique(df$GeneID)), " 件。GOエンリッチメントが可能になりました。"),
+                           type = "message", duration = 10)
+        }, error = function(e) {
+          showNotification(paste("GO注釈の取得に失敗:", conditionMessage(e)), type = "error", duration = 15)
+        })
+      })
+    })
+
+    # --- 方法B: gene2go アノテーション 手動アップロード ---
+    # NCBI gene2go 形式のタブ区切り表 (列: GeneID, GO, 任意で Term, Category) を読み込み、
+    # rv$gene2go_annotation に格納する。GOモジュールがこれを TERM2GENE として使用する。
+    observeEvent(input$gene2goFile, {
+      req(input$gene2goFile)
+      withProgress(message = "gene2goを解析中...", value = 0.5, {
+        tryCatch({
+          path <- input$gene2goFile$datapath
+          is_gz <- grepl("\\.gz$", input$gene2goFile$name, ignore.case = TRUE)
+          con <- if (is_gz) gzfile(path) else path
+          # 区切りはタブ優先、ダメならカンマで再試行
+          df <- tryCatch(
+            read.table(con, header = TRUE, sep = "\t", quote = "", stringsAsFactors = FALSE, fill = TRUE, comment.char = ""),
+            error = function(e) NULL
+          )
+          if (is.null(df) || ncol(df) < 2) {
+            con2 <- if (is_gz) gzfile(path) else path
+            df <- read.csv(con2, header = TRUE, stringsAsFactors = FALSE)
+          }
+          # 列名を正規化 (GeneID / GO の別名を許容)
+          cn <- tolower(colnames(df))
+          gid_i <- which(cn %in% c("geneid", "gene_id", "gene", "entrezid", "entrez"))[1]
+          go_i  <- which(cn %in% c("go", "go_id", "goid", "term_id"))[1]
+          if (is.na(gid_i) || is.na(go_i)) {
+            stop("必須列が見つかりません。GeneID 列と GO 列を含むタブ区切り表が必要です。")
+          }
+          out <- data.frame(GeneID = as.character(df[[gid_i]]), GO = as.character(df[[go_i]]), stringsAsFactors = FALSE)
+          term_i <- which(cn %in% c("term", "go_term", "name", "description"))[1]
+          cat_i  <- which(cn %in% c("category", "ontology", "namespace", "aspect"))[1]
+          if (!is.na(term_i)) out$Term <- as.character(df[[term_i]])
+          if (!is.na(cat_i)) {
+            # BP/MF/CC や biological_process 等を NCBI表記(Process/Function/Component)へ正規化
+            raw <- tolower(as.character(df[[cat_i]]))
+            out$Category <- ifelse(grepl("bp|process|biological", raw), "Process",
+                            ifelse(grepl("mf|function|molecular", raw), "Function",
+                            ifelse(grepl("cc|component|cellular", raw), "Component", as.character(df[[cat_i]]))))
+          }
+          out <- out[!is.na(out$GeneID) & nzchar(out$GeneID) & !is.na(out$GO) & nzchar(out$GO), , drop = FALSE]
+          out <- unique(out)
+          if (nrow(out) == 0) stop("有効な GeneID-GO ペアがありません。")
+          rv$gene2go_annotation <- out
+          showNotification(paste0("gene2go読み込み完了: ", nrow(out), " 注釈 / 遺伝子 ",
+                                  length(unique(out$GeneID)), " 件。非モデル生物のGO解析が可能になりました。"),
+                           type = "message", duration = 8)
+        }, error = function(e) {
+          showNotification(paste("gene2go読み込みエラー:", e$message), type = "error", duration = 15)
+          rv$gene2go_annotation <- NULL
+        })
+      })
+    })
+
+    output$gene2goStatusUI <- renderUI({
+      g <- rv$gene2go_annotation
+      if (is.null(g)) return(NULL)
+      has_cat <- "Category" %in% colnames(g)
+      tags$div(class = "alert alert-success", style = "padding: 8px; font-size: 0.85rem;",
+        icon("check-circle"),
+        HTML(paste0(" gene2go適用中: <b>", nrow(g), "</b> 注釈 / 遺伝子 <b>",
+                    length(unique(g$GeneID)), "</b> 件",
+                    if (has_cat) " / ontology別(BP/MF/CC)対応" else " / ontology列なし(全GO一括)"))
+      )
+    })
+
+    # KEGG生物種コード (任意): GOモジュールが enrichKEGG(organism=...) で使用
+    observeEvent(input$keggOrgCode, {
+      code <- trimws(input$keggOrgCode %||% "")
+      rv$kegg_organism_code <- if (nzchar(code)) code else NULL
+    }, ignoreInit = TRUE)
+
+
+    # 元ID -> 内部Geneid の対応表 (カウント処理時に各経路で格納)
+    id_map_store <- reactiveVal(NULL)  # data.frame(orig, Geneid)
+
+    # id_map_store と gtf_raw から rv$gene_annotation を構築し、遺伝子長を上書きする。
+    apply_gtf_annotation <- function() {
+      gtf <- gtf_raw()
+      map_df <- id_map_store()
+      if (is.null(gtf) || is.null(map_df)) { rv$gene_annotation <- NULL; return(invisible(NULL)) }
+      dt <- data.table::data.table(orig = as.character(map_df$orig), Geneid = as.character(map_df$Geneid))
+      g  <- data.table::as.data.table(gtf)
+      m  <- merge(dt, g, by.x = "orig", by.y = "gene_id", all.x = TRUE)
+      ann <- m[, list(
+        gene_name        = { v <- gene_name[!is.na(gene_name) & gene_name != ""]; if (length(v) > 0) v[1] else Geneid[1] },
+        biotype          = { v <- biotype[!is.na(biotype)]; if (length(v) > 0) v[1] else "unknown" },
+        gene_length      = { v <- gene_length[!is.na(gene_length)]; if (length(v) > 0) max(v) else NA_real_ },
+        gene_description = { v <- gene_description[!is.na(gene_description) & gene_description != ""]; if (length(v) > 0) v[1] else Geneid[1] }
+      ), by = Geneid]
+      rv$gene_annotation <- as.data.frame(ann)
+      # GTF由来の遺伝子長が得られた場合は rv$gene_lengths を上書き
+      if (any(!is.na(ann$gene_length))) {
+        rv$gene_lengths <- data.frame(Geneid = ann$Geneid, Length = ann$gene_length, stringsAsFactors = FALSE)
+      }
+    }
+
+    # GTFが (カウントデータの後に) アップロード/変更された場合も再構築
+    observeEvent(gtf_raw(), {
+      if (!is.null(id_map_store())) apply_gtf_annotation()
+    }, ignoreNULL = FALSE)
+
     data_processing_trigger <- reactive({
-      list(inputType = input$inputType, individualFiles = input$featureCountsFiles, mergedFile = input$mergedCountFile, species = input$species)
+      list(countFiles = input$countFiles, species = input$species)
     })
 
     observeEvent(data_processing_trigger(), {
       trigger <- data_processing_trigger()
-      inputType <- trigger$inputType
+      files_info <- trigger$countFiles
       species_code <- trigger$species
 
-      if (inputType == "individual" && is.null(trigger$individualFiles)) {
-        return()
-      }
-      if (inputType == "merged" && is.null(trigger$mergedFile)) {
-        return()
-      }
+      if (is.null(files_info)) return()
+
+      inputType <- detect_file_format(files_info)
+      if (is.null(inputType)) return()
 
       message("--- Data Processing Start ---")
       rv$merged_data <- NULL
@@ -321,8 +660,8 @@ dataUploadMetadataServer <- function(id, rv) {
         {
           # === A. 個別ファイル ===
           if (inputType == "individual") {
-            file_paths <- trigger$individualFiles$datapath
-            original_filenames <- trigger$individualFiles$name
+            file_paths <- files_info$datapath
+            original_filenames <- files_info$name
             names_no_ext <- sub("\\.[^.]*$", "", original_filenames)
             trimmed_names <- trim_common_strings(names_no_ext)
             initial_sample_names <- make.unique(trimmed_names)
@@ -345,12 +684,21 @@ dataUploadMetadataServer <- function(id, rv) {
             })
             common_ids <- Reduce(intersect, all_original)
             if (length(common_ids) == 0) stop("共通のGeneIDが見つかりません。")
+            inferred_species_code <- infer_species_from_gene_ids(common_ids)
+            if (!is.null(inferred_species_code) && inferred_species_code != species_code && species_code != "Others_Original") {
+              message(paste0("Detected Ensembl species '", inferred_species_code, "'. Overriding selected species '", species_code, "' for ID conversion."))
+              species_code <- inferred_species_code
+              rv$selected_species <- species_code
+              updateSelectInput(session, "species", selected = species_code)
+              showNotification("入力Gene IDから生物種を自動補正しました。", type = "message", duration = 6)
+            }
 
             conversion_res <- convert_or_pass_ids(common_ids, detected_keytype, species_code)
             rv$current_gene_id_type(conversion_res$final_id_type)
             rv$conversion_debug_info(conversion_res$conversion_map)
 
             map_df <- data.frame(OriginalGeneid = common_ids, Geneid = conversion_res$processed_ids, stringsAsFactors = FALSE)
+            id_map_store(data.frame(orig = map_df$OriginalGeneid, Geneid = map_df$Geneid, stringsAsFactors = FALSE))
 
             processed_list <- map2(raw_data_list, all_original, function(dt, clean_ids) {
               dt[, OriginalGeneid := clean_ids] # クリーニング済みIDで上書き
@@ -378,8 +726,7 @@ dataUploadMetadataServer <- function(id, rv) {
 
             # === B. 結合済みマトリックス ===
           } else if (inputType == "merged") {
-            req(trigger$mergedFile)
-            infile <- trigger$mergedFile
+            infile <- list(datapath = files_info$datapath[1], name = files_info$name[1])
             ext <- tools::file_ext(infile$name)
             sep_char <- if (tolower(ext) %in% c("tsv", "txt")) "\t" else ","
 
@@ -442,6 +789,14 @@ dataUploadMetadataServer <- function(id, rv) {
 
             original_ids <- rownames(clean_mat)
             detected_keytype <- detect_gene_id_type(original_ids)
+            inferred_species_code <- infer_species_from_gene_ids(original_ids)
+            if (!is.null(inferred_species_code) && inferred_species_code != species_code && species_code != "Others_Original") {
+              message(paste0("Detected Ensembl species '", inferred_species_code, "'. Overriding selected species '", species_code, "' for ID conversion."))
+              species_code <- inferred_species_code
+              rv$selected_species <- species_code
+              updateSelectInput(session, "species", selected = species_code)
+              showNotification("入力Gene IDから生物種を自動補正しました。", type = "message", duration = 6)
+            }
 
             if (species_code != "Others_Original") {
               message(paste0("Matrix Input: Detected ID type '", detected_keytype, "'. Converting to Entrez..."))
@@ -450,6 +805,7 @@ dataUploadMetadataServer <- function(id, rv) {
               rv$conversion_debug_info(conversion_res$conversion_map)
 
               map_df <- data.frame(Original = original_ids, New = conversion_res$processed_ids, stringsAsFactors = FALSE)
+              id_map_store(data.frame(orig = map_df$Original, Geneid = map_df$New, stringsAsFactors = FALSE))
               clean_mat_subset <- clean_mat[map_df$Original, , drop = FALSE]
               df_for_agg <- as.data.frame(clean_mat_subset)
               df_for_agg$Geneid <- map_df$New
@@ -466,10 +822,15 @@ dataUploadMetadataServer <- function(id, rv) {
               df_res$Geneid <- rownames(clean_mat)
               df_res <- df_res[, c("Geneid", setdiff(colnames(df_res), "Geneid"))]
               rv$merged_data <- df_res
+              # 変換なし: 元IDと内部Geneidは同一
+              id_map_store(data.frame(orig = df_res$Geneid, Geneid = df_res$Geneid, stringsAsFactors = FALSE))
             }
             rv$gene_lengths <- data.frame(Geneid = rv$merged_data$Geneid, Length = 1, stringsAsFactors = FALSE)
             showNotification(paste0("読み込み完了。データ開始:", data_start_idx, "行目"), type = "message")
           }
+
+          # GTFアノテーションが在れば内部Geneid基準で結合し、遺伝子長を上書き
+          apply_gtf_annotation()
 
           # === 共通: サンプルメタデータ ===
           current_samples <- setdiff(colnames(rv$merged_data), "Geneid")
@@ -487,6 +848,23 @@ dataUploadMetadataServer <- function(id, rv) {
           rv$sample_metadata <- NULL
         }
       )
+    })
+
+    # --- 検出フォーマットバッジ ---
+    output$detectedFormatUI <- renderUI({
+      files_info <- input$countFiles
+      if (is.null(files_info)) return(NULL)
+      fmt <- detect_file_format(files_info)
+      n <- nrow(files_info)
+      if (fmt == "individual") {
+        div(class = "alert alert-info mt-2 mb-0 py-2",
+            tags$strong("Detected:"),
+            paste0(" featureCounts individual files (", n, " file", if(n>1)"s" else "", ")"))
+      } else {
+        div(class = "alert alert-success mt-2 mb-0 py-2",
+            tags$strong("Detected:"),
+            paste0(" Merged count matrix — ", files_info$name[1]))
+      }
     })
 
     # --- 列の追加・削除のハンドラ ---
@@ -579,20 +957,19 @@ dataUploadMetadataServer <- function(id, rv) {
       all_cols <- colnames(rv$sample_metadata)
       base_cols <- c("active", "current_name", "group")
       factor_cols <- setdiff(all_cols, c(base_cols, "id", "time"))
-      cols_to_show <- c(base_cols, factor_cols, "id")
+      cols_to_show <- c(base_cols, factor_cols)
 
-      # time列があれば末尾に追加(今回はデフォルトで外したが、読み込みなどで存在する場合)
+      # time列があれば末尾に追加
       if ("time" %in% all_cols) {
-        cols_to_show <- c(base_cols, factor_cols, "time", "id")
+        cols_to_show <- c(base_cols, factor_cols, "time")
       }
 
-      df_display <- rv$sample_metadata[, cols_to_show]
+      df_display <- rv$sample_metadata[, cols_to_show, drop = FALSE]
 
       rhp <- rhandsontable(df_display, rowHeaders = NULL, stretchH = "all") %>%
         hot_col("active", halign = "center", type = "checkbox") %>%
         hot_col("current_name", header = "Sample Name") %>%
         hot_col("group", header = "Group") %>%
-        hot_col("id", readOnly = TRUE) %>%
         hot_context_menu(allowRowEdit = FALSE, allowColEdit = FALSE)
 
       if ("time" %in% all_cols) {
@@ -619,17 +996,19 @@ dataUploadMetadataServer <- function(id, rv) {
 
       current_meta <- rv$sample_metadata
 
+      # 非表示列 (id 等) を current_meta から復元
+      hidden_cols <- setdiff(colnames(current_meta), colnames(new_df))
+      for (col in hidden_cols) {
+        new_df[[col]] <- current_meta[[col]]
+      }
+
       # 変更検知 (列ごとに比較)
       is_changed <- FALSE
-      # 新しいdfになくて現在のmetaにある列があるか、またはその逆があれば変更
-      if (!identical(sort(colnames(current_meta)), sort(colnames(new_df)))) {
-        is_changed <- TRUE
-      } else {
-        for (col in colnames(current_meta)) {
-          if (!identical(current_meta[[col]], new_df[[col]])) {
-            is_changed <- TRUE
-            break
-          }
+      shared_cols <- intersect(colnames(current_meta), colnames(new_df))
+      for (col in shared_cols) {
+        if (!identical(current_meta[[col]], new_df[[col]])) {
+          is_changed <- TRUE
+          break
         }
       }
 
@@ -654,7 +1033,7 @@ dataUploadMetadataServer <- function(id, rv) {
 
     # --- デバッグ情報出力 ---
     output$idConversionSummary <- renderPrint({
-      req(rv$conversion_debug_info)
+      req(rv$conversion_debug_info())
       df <- rv$conversion_debug_info()
       if (is.null(df) || nrow(df) == 0) {
         return("変換情報なし")
@@ -676,8 +1055,8 @@ dataUploadMetadataServer <- function(id, rv) {
     })
 
     output$idConversionTable <- renderDT({
-      req(rv$conversion_debug_info)
-      datatable(rv$conversion_debug_info(), options = list(pageLength = 10, scrollX = TRUE), filter = "top")
+      req(rv$conversion_debug_info())
+      datatable(rv$conversion_debug_info(), style = "bootstrap5", class = "table-hover table-sm", options = list(pageLength = 10, scrollX = TRUE), filter = "top")
     })
 
     # --- プロットなど ---

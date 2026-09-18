@@ -17,7 +17,7 @@ RUN R -e "install.packages(c('shiny', 'plotly', 'DT', 'shinycssloaders', 'pheatm
 
 # Install Bioconductor packages
 RUN R -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager'); \
-    BiocManager::install(c('edgeR', 'DESeq2', 'AnnotationDbi', 'org.Hs.eg.db', 'org.Mm.eg.db', 'limma', 'fgsea', 'clusterProfiler', 'enrichplot', 'maSigPro'), ask=FALSE)"
+    BiocManager::install(c('edgeR', 'DESeq2', 'AnnotationDbi', 'org.Hs.eg.db', 'org.Mm.eg.db', 'limma', 'fgsea', 'clusterProfiler', 'enrichplot', 'maSigPro', 'GO.db'), ask=FALSE)"
 
 # Create app directory
 WORKDIR /srv/shiny-server/

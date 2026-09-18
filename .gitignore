@@ -17,7 +17,10 @@ Rplots.pdf
 **/.codex
 
 # Backup / frozen snapshots
-after_count_stable_2026-04-23/
+R_v3_backup/*
+!R_v3_backup/README.md
+after_count/history/*
+!after_count/history/README.md
 *.bak_*
 
 # Internal project tracking

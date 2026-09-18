@@ -54,8 +54,8 @@ kegg_species_map <- c(
   "Macaca_mulatta" = "mcc",
   "Pan_troglodytes" = "ptr",
   "Sus_scrofa" = "ssc",
-  "Xenopus_laevis" = "xla"
-  # 必要に応じて他の生物種を追加
+  "Xenopus_laevis" = "xla",
+  "Lotus_japonicus" = "lja"
 )
 
 
@@ -93,11 +93,12 @@ goEnrichmentIntegratedUI <- function(id) {
       ),
       column(4, 
              selectInput(ns("analysis_type"), "解析タイプ:",
-                         choices = c("ALL (GO + KEGG)" = "ALL",
+                         choices = c("ALL (GO + KEGG + Reactome)" = "ALL",
                                      "GO: BP" = "BP",
                                      "GO: MF" = "MF",
                                      "GO: CC" = "CC",
-                                     "KEGG" = "KEGG"),
+                                     "KEGG" = "KEGG",
+                                     "Reactome" = "REACTOME"),
                          selected = "ALL")
       ),
       column(4,
@@ -138,51 +139,42 @@ goEnrichmentIntegratedUI <- function(id) {
                numericInput(ns("dotplot_n"), "表示するターム数:", value = 10, min = 1, max = 50),
                withSpinner(plotOutput(ns("goDotPlot")), type = 6),
                downloadButton(ns("downloadDotPlot"), "Dot Plotをダウンロード (.png)", icon = icon("download"))
+      ),
+      tabPanel("Network Plot",
+               helpText("遺伝子とエンリッチされたタームの関係をネットワーク図で表示します。"),
+               uiOutput(ns("plot_selector_ui_net")), # プロットセレクター
+               numericInput(ns("netplot_n"), "表示するターム数:", value = 5, min = 1, max = 20),
+               withSpinner(plotOutput(ns("goNetPlot")), type = 6),
+               downloadButton(ns("downloadNetPlot"), "Network Plotをダウンロード (.png)", icon = icon("download"))
       )
     )
   )
 }
 
-goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_genes_reactive, selected_species_code_reactive) { 
+goEnrichmentIntegratedServer <- function(id, rv, deg_results_reactive, background_genes_reactive, selected_species_code_reactive, gene_annotation_reactive = reactive(NULL), gtf_id_choices_reactive = reactive(NULL)) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
+
     analysis_results <- reactiveVal(NULL)
     analysis_running <- reactiveVal(FALSE)
+
+    # GTFアップロード時は、その中身に応じて表示する遺伝子IDタイプの選択肢・ラベルを追従させる
+    observeEvent(gtf_id_choices_reactive(), {
+      ch <- gtf_id_choices_reactive()
+      if (is.null(ch)) {
+        ch <- list(choices = c("Gene Symbol" = "SYMBOL", "Entrez ID (内部ID)" = "ENTREZID"), selected = "SYMBOL")
+      }
+      updateSelectInput(session, "go_id_display_type", choices = ch$choices, selected = ch$selected)
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
     
+    # 共通ヘルパー annotate_display_ids に委譲 (GTFアノテーション優先 -> OrgDb -> 生ID)
     convert_entrez_ids_for_display <- function(entrez_ids, target_display_type, selected_species_code) {
       if (target_display_type == "ENTREZID" || is.null(target_display_type) || !nzchar(target_display_type)) {
         return(as.character(entrez_ids))
       }
       req(selected_species_code)
-      orgdb_pkg_name <- orgdb_species_map[[selected_species_code]]
-      
-      if (is.null(orgdb_pkg_name) || !nzchar(orgdb_pkg_name)) {
-        return(as.character(entrez_ids))
-      }
-      if (!requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
-        return(as.character(entrez_ids))
-      }
-      
-      org_db <- get(orgdb_pkg_name)
-      if (!target_display_type %in% columns(org_db) || !"ENTREZID" %in% keytypes(org_db)) {
-        return(as.character(entrez_ids))
-      }
-      
-      unique_entrez_keys <- unique(as.character(entrez_ids))
-      converted_map <- tryCatch(
-        suppressMessages(mapIds(org_db, keys = unique_entrez_keys, column = target_display_type, keytype = "ENTREZID", multiVals = "first")),
-        error = function(e) { NULL }
-      )
-      
-      if (is.null(converted_map)) return(as.character(entrez_ids))
-      
-      final_converted_ids <- converted_map[as.character(entrez_ids)]
-      na_indices <- is.na(final_converted_ids)
-      if (any(na_indices)) {
-        final_converted_ids[na_indices] <- paste0(as.character(entrez_ids[na_indices]), " (変換不可)")
-      }
-      return(as.character(final_converted_ids))
+      annotate_display_ids(entrez_ids, target_display_type, selected_species_code,
+                           gene_annotation = gene_annotation_reactive(), orgdb_map = orgdb_species_map)
     }
     
     observeEvent(deg_results_reactive(), {
@@ -247,36 +239,199 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
         # GO Analysis
         go_ontologies <- if (input$analysis_type == "ALL") c("BP", "MF", "CC") else if (input$analysis_type %in% c("BP", "MF", "CC")) input$analysis_type else c()
         if (length(go_ontologies) > 0) {
-          orgdb_pkg_name <- orgdb_species_map[[current_selected_species_code]]
-          if (is.null(orgdb_pkg_name) || !nzchar(orgdb_pkg_name) || !requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
-            stop(paste0("GO解析に必要なOrgDbパッケージ '", orgdb_pkg_name, "' が見つかりません。"))
-          }
-          require(orgdb_pkg_name, character.only = TRUE)
-          orgDb_object <- get(orgdb_pkg_name)
-          
-          for (ont_cat in go_ontologies) {
-            message("  - Running enrichGO for: ", ont_cat)
-            res_ont <- enrichGO(gene = target_genes_entrez_final, universe = universe_genes_entrez_final,
-                                OrgDb = orgDb_object, keyType = 'ENTREZID', ont = ont_cat,
-                                pAdjustMethod = "BH", pvalueCutoff = input$pvalue_cutoff, qvalueCutoff = input$qvalue_cutoff,
-                                readable = FALSE)
+          if (!is.null(rv$custom_annotations) && !is.null(rv$custom_annotations$go_t2g)) {
+            message("  - Running enricher (Custom GO)")
+            t2g <- rv$custom_annotations$go_t2g
+            res_ont <- tryCatch(
+              clusterProfiler::enricher(
+                gene = target_genes_entrez_final,
+                universe = universe_genes_entrez_final,
+                TERM2GENE = t2g,
+                pAdjustMethod = "BH",
+                pvalueCutoff = input$pvalue_cutoff,
+                qvalueCutoff = input$qvalue_cutoff
+              ),
+              error = function(e) { message("enricher (custom GO) error: ", e$message); NULL }
+            )
             if (!is.null(res_ont) && nrow(as.data.frame(res_ont)) > 0) {
-              all_results_list[[ont_cat]] <- res_ont
+              all_results_list[["Custom_GO"]] <- res_ont
+            }
+          } else if (!is.null(rv$gene2go_annotation) || !is.null(resolve_bundled_gene2go(current_selected_species_code))) {
+            # OrgDb不在の生物種: gene2go (NCBI gene2go形式: GeneID, GO, [Term], [Category]) ベースの
+            # TERM2GENE で GO エンリッチメントを代替する。
+            #   優先1: ユーザーがアップロードした rv$gene2go_annotation (任意の非モデル生物)
+            #   優先2: アプリに同梱した種別 gene2go (bundled_gene2go_registry; 例 Lotus=lja)
+            #         → ユーザーは種を選ぶだけ。アップロード不要。
+            gene2go_df <- NULL
+            if (!is.null(rv$gene2go_annotation) && is.data.frame(rv$gene2go_annotation) && nrow(rv$gene2go_annotation) > 0) {
+              gene2go_df <- rv$gene2go_annotation
+              message("  - GO: using uploaded gene2go annotation (", nrow(gene2go_df), " rows)")
+            } else {
+              bundled_path <- resolve_bundled_gene2go(current_selected_species_code)
+              if (is.null(bundled_path)) {
+                showNotification(paste0("同梱 gene2go が見つかりません (", current_selected_species_code,
+                                        ")。GO解析をスキップします。"), type = "warning", duration = 8)
+              } else {
+                message("  - GO: using bundled gene2go for ", current_selected_species_code, ": ", bundled_path)
+                gene2go_df <- read.table(gzfile(bundled_path), header = TRUE, sep = "\t", quote = "", stringsAsFactors = FALSE)
+              }
+            }
+            if (!is.null(gene2go_df) && all(c("GeneID", "GO") %in% colnames(gene2go_df))) {
+              gene2go_df$GeneID <- as.character(gene2go_df$GeneID)
+              has_cat  <- "Category" %in% colnames(gene2go_df)
+              has_term <- "Term" %in% colnames(gene2go_df)
+              # Category列があれば NCBI形式 (Process/Function/Component) で ontology 別に集計、
+              # 無ければ ontology で分けず一括 (1回) で解析する。
+              ont_loop <- if (has_cat) go_ontologies else "ALL_GO"
+              for (ont_cat in ont_loop) {
+                if (has_cat) {
+                  ont_label <- switch(ont_cat, "BP" = "Process", "MF" = "Function", "CC" = "Component", ont_cat)
+                  sub_df <- gene2go_df[gene2go_df$Category == ont_label, , drop = FALSE]
+                } else {
+                  sub_df <- gene2go_df
+                }
+                t2g <- sub_df[, c("GO", "GeneID")]
+                colnames(t2g) <- c("term", "gene")
+                message("  - Running enricher (non-model GO) for: ", ont_cat, " (", nrow(t2g), " annotations)")
+                res_ont <- tryCatch(
+                  clusterProfiler::enricher(
+                    gene = target_genes_entrez_final,
+                    universe = universe_genes_entrez_final,
+                    TERM2GENE = t2g,
+                    pAdjustMethod = "BH",
+                    pvalueCutoff = input$pvalue_cutoff,
+                    qvalueCutoff = input$qvalue_cutoff
+                  ),
+                  error = function(e) { message("enricher error: ", e$message); NULL }
+                )
+                if (!is.null(res_ont) && nrow(as.data.frame(res_ont)) > 0) {
+                  # Descriptionをterm名(Term列)で補完
+                  if (has_term) {
+                    t2d <- unique(gene2go_df[, c("GO", "Term")])
+                    idx <- match(res_ont@result$ID, t2d$GO)
+                    res_ont@result$Description <- ifelse(is.na(idx), res_ont@result$ID, t2d$Term[idx])
+                  }
+                  res_key <- if (has_cat) ont_cat else "GO"
+                  all_results_list[[res_key]] <- res_ont
+                }
+              }
+            }
+          } else {
+            orgdb_pkg_name <- orgdb_species_map[[current_selected_species_code]]
+            if (is.null(orgdb_pkg_name) || !nzchar(orgdb_pkg_name) || !requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
+              stop(paste0("GO解析に必要なOrgDbパッケージ '", orgdb_pkg_name,
+                          "' が見つかりません。非モデル生物の場合は、データアップロードタブで ",
+                          "gene2go アノテーション (GeneID, GO, Category 列) または eggNOG-mapper アノテーションを",
+                          "アップロードしてください。"))
+            }
+            require(orgdb_pkg_name, character.only = TRUE)
+            orgDb_object <- get(orgdb_pkg_name)
+            for (ont_cat in go_ontologies) {
+              message("  - Running enrichGO for: ", ont_cat)
+              res_ont <- enrichGO(gene = target_genes_entrez_final, universe = universe_genes_entrez_final,
+                                  OrgDb = orgDb_object, keyType = 'ENTREZID', ont = ont_cat,
+                                  pAdjustMethod = "BH", pvalueCutoff = input$pvalue_cutoff, qvalueCutoff = input$qvalue_cutoff,
+                                  readable = FALSE)
+              if (!is.null(res_ont) && nrow(as.data.frame(res_ont)) > 0) {
+                all_results_list[[ont_cat]] <- res_ont
+              }
             }
           }
         }
         
         # KEGG Analysis
         if (input$analysis_type == "ALL" || input$analysis_type == "KEGG") {
-          kegg_code <- kegg_species_map[[current_selected_species_code]]
-          if (is.null(kegg_code) || !nzchar(kegg_code)) {
-            showNotification(paste0("KEGG解析はスキップされました: '", current_selected_species_code, "' に対応するKEGGコードがありません。"), type = "warning", duration = 8)
-          } else {
-            message("  - Running enrichKEGG for: ", kegg_code)
-            res_kegg <- enrichKEGG(gene = target_genes_entrez_final, universe = universe_genes_entrez_final,
-                                   organism = kegg_code, pvalueCutoff = input$pvalue_cutoff, qvalueCutoff = input$qvalue_cutoff)
+          if (!is.null(rv$custom_annotations) && (!is.null(rv$custom_annotations$ko_t2g) || !is.null(rv$custom_annotations$pathway_t2g))) {
+            if (!is.null(rv$custom_annotations$pathway_t2g)) {
+              t2g <- rv$custom_annotations$pathway_t2g
+              message("  - Running enricher (Custom KEGG Pathway)")
+            } else {
+              t2g <- rv$custom_annotations$ko_t2g
+              message("  - Running enricher (Custom KEGG KO)")
+            }
+            res_kegg <- tryCatch(
+              clusterProfiler::enricher(
+                gene = target_genes_entrez_final,
+                universe = universe_genes_entrez_final,
+                TERM2GENE = t2g,
+                pAdjustMethod = "BH",
+                pvalueCutoff = input$pvalue_cutoff,
+                qvalueCutoff = input$qvalue_cutoff
+              ),
+              error = function(e) { message("enricher (custom KEGG) error: ", e$message); NULL }
+            )
             if (!is.null(res_kegg) && nrow(as.data.frame(res_kegg)) > 0) {
-              all_results_list[["KEGG"]] <- res_kegg
+              all_results_list[["Custom_KEGG"]] <- res_kegg
+            }
+          } else {
+            # KEGG生物種コード: ユーザー指定(rv$kegg_organism_code, 例 lja)を優先、無ければ内蔵マップ
+            kegg_code <- rv$kegg_organism_code
+            if (is.null(kegg_code) || !nzchar(kegg_code)) kegg_code <- kegg_species_map[[current_selected_species_code]]
+            if (is.null(kegg_code) || !nzchar(kegg_code)) {
+              showNotification(paste0("KEGG解析はスキップされました: '", current_selected_species_code, "' に対応するKEGGコードがありません。データアップロードタブでKEGG生物種コード(例: lja)を指定できます。"), type = "warning", duration = 8)
+            } else {
+              message("  - Running enrichKEGG for: ", kegg_code)
+              # enrichKEGG はオンラインKEGG取得に失敗すると "長さ0の変数名" 等で落ちるため、
+              # tryCatch で隔離し失敗してもGO等の結果を巻き込まないようにする。
+              res_kegg <- tryCatch(
+                enrichKEGG(gene = target_genes_entrez_final, universe = universe_genes_entrez_final,
+                           organism = kegg_code, pvalueCutoff = input$pvalue_cutoff, qvalueCutoff = input$qvalue_cutoff),
+                error = function(e) {
+                  message("enrichKEGG error: ", e$message)
+                  showNotification(paste0("KEGG解析をスキップしました (", conditionMessage(e), ")"), type = "warning", duration = 8)
+                  NULL
+                }
+              )
+              if (!is.null(res_kegg) && nrow(as.data.frame(res_kegg)) > 0) {
+                all_results_list[["KEGG"]] <- res_kegg
+              }
+            }
+          }
+        }
+        
+        # Reactome Analysis
+        if (input$analysis_type == "ALL" || input$analysis_type == "REACTOME") {
+          msig_species_name <- switch(current_selected_species_code,
+            "Homo_sapiens" = "Homo sapiens",
+            "Mus_musculus" = "Mus musculus",
+            "Rattus_norvegicus" = "Rattus norvegicus",
+            "Drosophila_melanogaster" = "Drosophila melanogaster",
+            "Caenorhabditis_elegans" = "Caenorhabditis elegans",
+            "Danio_rerio" = "Danio rerio",
+            "Saccharomyces_cerevisiae" = "Saccharomyces cerevisiae",
+            "Bos_taurus" = "Bos taurus",
+            "Gallus_gallus" = "Gallus gallus",
+            "Canis_familiaris" = "Canis lupus familiaris",
+            "Macaca_mulatta" = "Macaca mulatta",
+            "Pan_troglodytes" = "Pan troglodytes",
+            "Sus_scrofa" = "Sus scrofa",
+            NULL
+          )
+          if (!is.null(msig_species_name)) {
+            message("  - Running enrichReactome (via msigdbr) for: ", msig_species_name)
+            reactome_df <- tryCatch({
+              msigdbr::msigdbr(species = msig_species_name, category = "C2", subcategory = "CP:REACTOME")
+            }, error = function(e) {
+              message("Reactome load error: ", e$message)
+              NULL
+            })
+            if (!is.null(reactome_df) && nrow(reactome_df) > 0) {
+              m_t2g <- reactome_df[, c("gs_name", "entrez_gene")]
+              res_reactome <- tryCatch({
+                clusterProfiler::enricher(
+                  gene = target_genes_entrez_final,
+                  universe = universe_genes_entrez_final,
+                  TERM2GENE = m_t2g,
+                  pvalueCutoff = input$pvalue_cutoff,
+                  qvalueCutoff = input$qvalue_cutoff
+                )
+              }, error = function(e) {
+                message("Reactome enricher error: ", e$message)
+                NULL
+              })
+              if (!is.null(res_reactome) && nrow(as.data.frame(res_reactome)) > 0) {
+                all_results_list[["REACTOME"]] <- res_reactome
+              }
             }
           }
         }
@@ -337,21 +492,21 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
     
     output$goResultTable <- renderDT({
       if (analysis_running()) {
-        return(datatable(data.frame(Message = "解析中..."), options = list(dom = 't', searching = FALSE)))
+        return(datatable(data.frame(Message = "解析中..."), style = "bootstrap5", options = list(dom = 't', searching = FALSE)))
       }
-      
+
       final_table <- final_table_reactive()
       if (is.null(final_table)) {
-        return(datatable(data.frame(Message = "解析を実行してください。"), options = list(dom = 't', searching = FALSE)))
+        return(datatable(data.frame(Message = "解析を実行してください。"), style = "bootstrap5", options = list(dom = 't', searching = FALSE)))
       }
       if("Message" %in% colnames(final_table)){
-        return(datatable(final_table, options = list(dom = 't', searching = FALSE)))
+        return(datatable(final_table, style = "bootstrap5", options = list(dom = 't', searching = FALSE)))
       }
-      
+
       res_df_display <- final_table %>%
         mutate(across(where(is.numeric), ~ round(.x, digits = 4)))
-      
-      datatable(res_df_display, rownames = FALSE, filter = "top", extensions = 'Buttons', options = list(pageLength=10, scrollX=TRUE), escape = FALSE)
+
+      datatable(res_df_display, rownames = FALSE, style = "bootstrap5", class = "table-hover table-sm", filter = "top", extensions = 'Buttons', options = list(pageLength=10, scrollX=TRUE), escape = FALSE)
     })
     
     output$plot_selector_ui_bar <- renderUI({
@@ -364,31 +519,51 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
       req(input$analysis_type == "ALL", results_list, length(results_list) > 1)
       selectInput(ns("plot_source_dot"), "プロット対象:", choices = names(results_list), selected = names(results_list)[1])
     })
-    
-    get_plot_data_object <- reactive({
+    output$plot_selector_ui_net <- renderUI({
       results_list <- analysis_results()
-      req(results_list)
-      
-      source_key <- if (input$analysis_type == "ALL") {
-        req(input$plot_source_bar) 
-        input$plot_source_bar
-      } else {
-        input$analysis_type
-      }
-      
-      result_obj <- results_list[[source_key]]
-      req(result_obj, inherits(result_obj, "enrichResult"))
-      
-      orgdb_pkg_name <- orgdb_species_map[[selected_species_code_reactive()]]
+      req(input$analysis_type == "ALL", results_list, length(results_list) > 1)
+      selectInput(ns("plot_source_net"), "プロット対象:", choices = names(results_list), selected = names(results_list)[1])
+    })
+    
+    .apply_set_readable <- function(result_obj, species_code) {
+      if (species_code == "Lotus_japonicus") return(result_obj)
+      orgdb_pkg_name <- orgdb_species_map[[species_code]]
       if (!is.null(orgdb_pkg_name) && requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
         orgDb_obj <- get(orgdb_pkg_name)
         result_obj <- setReadable(result_obj, OrgDb = orgDb_obj, keyType = "ENTREZID")
       }
       return(result_obj)
+    }
+
+    get_plot_data_object_bar <- reactive({
+      results_list <- analysis_results()
+      req(results_list)
+      source_key <- if (input$analysis_type == "ALL") { req(input$plot_source_bar); input$plot_source_bar } else { input$analysis_type }
+      result_obj <- results_list[[source_key]]
+      req(result_obj, inherits(result_obj, "enrichResult"))
+      .apply_set_readable(result_obj, selected_species_code_reactive())
+    })
+
+    get_plot_data_object_dot <- reactive({
+      results_list <- analysis_results()
+      req(results_list)
+      source_key <- if (input$analysis_type == "ALL") { req(input$plot_source_dot); input$plot_source_dot } else { input$analysis_type }
+      result_obj <- results_list[[source_key]]
+      req(result_obj, inherits(result_obj, "enrichResult"))
+      .apply_set_readable(result_obj, selected_species_code_reactive())
+    })
+
+    get_plot_data_object_net <- reactive({
+      results_list <- analysis_results()
+      req(results_list)
+      source_key <- if (input$analysis_type == "ALL") { req(input$plot_source_net); input$plot_source_net } else { input$analysis_type }
+      result_obj <- results_list[[source_key]]
+      req(result_obj, inherits(result_obj, "enrichResult"))
+      .apply_set_readable(result_obj, selected_species_code_reactive())
     })
     
     bar_plot_gg_object <- reactive({
-      result_obj_for_plot <- get_plot_data_object()
+      result_obj_for_plot <- get_plot_data_object_bar()
       req(result_obj_for_plot)
       shiny::validate(shiny::need(nrow(as.data.frame(result_obj_for_plot)) > 0, "プロットする有意なタームがありません。"))
       n_terms <- min(input$barplot_n, nrow(as.data.frame(result_obj_for_plot)))
@@ -400,7 +575,7 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
     })
     
     dot_plot_gg_object <- reactive({
-      result_obj_for_plot <- get_plot_data_object()
+      result_obj_for_plot <- get_plot_data_object_dot()
       req(result_obj_for_plot)
       shiny::validate(shiny::need(nrow(as.data.frame(result_obj_for_plot)) > 0, "プロットする有意なタームがありません。"))
       n_terms <- min(input$dotplot_n, nrow(as.data.frame(result_obj_for_plot)))
@@ -410,6 +585,27 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
     output$goDotPlot <- renderPlot({
       print(dot_plot_gg_object())
     })
+    
+    net_plot_gg_object <- reactive({
+      result_obj_for_plot <- get_plot_data_object_net()
+      req(result_obj_for_plot)
+      shiny::validate(shiny::need(nrow(as.data.frame(result_obj_for_plot)) > 0, "プロットする有意なタームがありません。"))
+      n_terms <- min(input$netplot_n, nrow(as.data.frame(result_obj_for_plot)))
+      enrichplot::cnetplot(result_obj_for_plot, showCategory = n_terms)
+    })
+    
+    output$goNetPlot <- renderPlot({
+      print(net_plot_gg_object())
+    })
+    
+    output$downloadNetPlot <- downloadHandler(
+      filename = function() {
+        paste0("NetworkPlot_", Sys.Date(), ".png")
+      },
+      content = function(file) {
+        ggsave(file, plot = net_plot_gg_object(), device = "png", width = 10, height = 8, dpi = 300)
+      }
+    )
     
     # エンリッチメント解析パラメータのメタデータを生成
     enrichment_metadata_df <- reactive({
@@ -488,6 +684,6 @@ goEnrichmentIntegratedServer <- function(id, deg_results_reactive, background_ge
         }
       }
     )
-    
+    return(analysis_results)
   }) 
 }

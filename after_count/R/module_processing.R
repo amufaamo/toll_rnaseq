@@ -160,8 +160,17 @@ processingUI <- function(id) {
           checkboxInput(ns("hm1_show_group"), "サンプル上のグループ名(カラーバー)を表示", value = TRUE)
         )
       ),
-      withSpinner(plotOutput(ns("expression_barplot"), width = "800px", height = "600px"), type = 6),
-      downloadButton(ns("download_expression_plot"), "プロットをダウンロード (.png)", icon = icon("download")),
+      fluidRow(
+        column(3, numericInput(ns("barplot_w"), "Width (inch):", value = 8, min = 3, max = 30, step = 0.5)),
+        column(3, numericInput(ns("barplot_h"), "Height (inch):", value = 6, min = 3, max = 30, step = 0.5)),
+        column(3, div(style = "margin-top: 25px;",
+          downloadButton(ns("download_expression_pdf"), "Save PDF (.pdf)", icon = icon("file-pdf"), class = "btn btn-outline-secondary")
+        )),
+        column(3, div(style = "margin-top: 25px;",
+          downloadButton(ns("download_expression_plot"), "Save PNG (.png)", icon = icon("download"), class = "btn btn-outline-secondary")
+        ))
+      ),
+      withSpinner(uiOutput(ns("expression_barplot_area")), type = 6),
       hr(),
       h4(icon("fire"), "カスタム遺伝子ヒートマップ"),
       helpText(icon("question-circle"), " カンマ区切りで複数の遺伝子を入力してヒートマップを描画します。（重複や存在しない遺伝子は自動的に除かれます）"),
@@ -186,8 +195,14 @@ processingUI <- function(id) {
       ),
       actionButton(ns("draw_custom_heatmap"), "ヒートマップを生成", icon = icon("paint-brush")),
       br(), br(),
-      withSpinner(plotOutput(ns("custom_heatmap_plot"), width = "800px", height = "800px"), type = 6),
-      downloadButton(ns("download_custom_heatmap"), "ヒートマップをPDFで保存 (.pdf)", icon = icon("file-pdf"))
+      fluidRow(
+        column(3, numericInput(ns("heatmap_w"), "Width (inch):", value = 8, min = 3, max = 30, step = 0.5)),
+        column(3, numericInput(ns("heatmap_h"), "Height (inch):", value = 8, min = 3, max = 30, step = 0.5)),
+        column(3, div(style = "margin-top: 25px;",
+          downloadButton(ns("download_custom_heatmap"), "Save PDF (.pdf)", icon = icon("file-pdf"), class = "btn btn-outline-secondary")
+        ))
+      ),
+      withSpinner(uiOutput(ns("custom_heatmap_area")), type = 6),
     )
   )
 }
@@ -198,6 +213,18 @@ processingServer <- function(id, rv) {
 
     detected_input_id_type <- reactiveVal("ENTREZID")
 
+    # 表示IDタイプの選択肢: GTFアップロード時は rv$gtf_id_choices を、無ければ既定3択を使う
+    id_display_choices <- function() {
+      ch <- rv$gtf_id_choices
+      if (is.null(ch)) ch <- gtf_display_id_choices(NULL)
+      ch
+    }
+    # GTFが (カウントデータの後に) アップロード/変更されたら表示IDタイプの選択肢も追従させる
+    observeEvent(rv$gtf_id_choices, {
+      ch <- id_display_choices()
+      updateSelectInput(session, "id_display_type", choices = ch$choices, selected = ch$selected)
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
+
     observeEvent(rv$merged_data,
       {
         req(rv$merged_data)
@@ -205,15 +232,10 @@ processingServer <- function(id, rv) {
           detected_input_id_type("ENTREZID")
           message("[Processing Module] Assumed internal GeneID type: ENTREZID")
 
-          display_choices_map <- c(
-            "Gene Symbol" = "SYMBOL",
-            "Entrez ID (内部ID)" = "ENTREZID",
-            "Gene Name" = "GENENAME"
-          )
-
+          ch <- id_display_choices()
           updateSelectInput(session, "id_display_type",
-            choices = display_choices_map,
-            selected = "SYMBOL"
+            choices = ch$choices,
+            selected = ch$selected
           )
         } else {
           detected_input_id_type("UNKNOWN")
@@ -392,21 +414,11 @@ processingServer <- function(id, rv) {
       ids_to_display <- as.character(table_for_display[[1]])
       if (selected_display_type_ui != "ENTREZID") {
         req(rv$selected_species)
-        orgdb_pkg_name_display <- orgdb_species_map[[rv$selected_species]]
-        if (!is.null(orgdb_pkg_name_display) && requireNamespace(orgdb_pkg_name_display, quietly = TRUE)) {
-          require(orgdb_pkg_name_display, character.only = TRUE, quietly = TRUE)
-          org_db_display <- get(orgdb_pkg_name_display)
-          if (selected_display_type_ui %in% columns(org_db_display) && "ENTREZID" %in% keytypes(org_db_display)) {
-            original_entrez_ids <- as.character(table_for_display[[1]])
-            converted_map <- tryCatch(suppressMessages(mapIds(org_db_display, keys = unique(original_entrez_ids), column = selected_display_type_ui, keytype = "ENTREZID", multiVals = "first")), error = function(e) NULL)
-            if (!is.null(converted_map)) {
-              mapped_values <- converted_map[original_entrez_ids]
-              na_indices <- is.na(mapped_values)
-              if (any(na_indices)) mapped_values[na_indices] <- paste0(original_entrez_ids[na_indices], " (変換不可)")
-              ids_to_display <- mapped_values
-            }
-          }
-        }
+        # 共通ヘルパーで変換 (GTFアノテーション優先 -> OrgDb -> 生ID)
+        ids_to_display <- annotate_display_ids(
+          ids_to_display, selected_display_type_ui, rv$selected_species,
+          gene_annotation = rv$gene_annotation, orgdb_map = orgdb_species_map
+        )
       }
       table_for_display[[1]] <- ids_to_display
       choices_map <- c("Gene Symbol" = "SYMBOL", "Entrez ID (内部ID)" = "ENTREZID", "Gene Name" = "GENENAME")
@@ -421,7 +433,7 @@ processingServer <- function(id, rv) {
       req(final_table)
       display_col_name <- colnames(final_table)[1]
       dt_options <- list(pageLength = 15, scrollX = TRUE, searching = TRUE, columnDefs = list(list(className = "dt-right", targets = "_all")))
-      datatable(final_table, rownames = FALSE, options = dt_options, filter = "top") %>%
+      datatable(final_table, rownames = FALSE, style = "bootstrap5", class = "table-hover table-sm", options = dt_options, filter = "top") %>%
         formatRound(columns = if (input$normalization_method != "raw" && ncol(final_table) > 1) base::setdiff(colnames(final_table), display_col_name) else NULL, digits = 3)
     })
 
@@ -569,6 +581,14 @@ processingServer <- function(id, rv) {
       }
     })
 
+    output$expression_barplot_area <- renderUI({
+      h_in <- if (!is.null(input$barplot_h) && !is.na(input$barplot_h)) input$barplot_h else 6
+      w_in <- if (!is.null(input$barplot_w) && !is.na(input$barplot_w)) input$barplot_w else 8
+      h_px <- paste0(round(h_in * 96), "px")
+      w_px <- paste0(round(w_in * 96), "px")
+      plotOutput(ns("expression_barplot"), height = h_px, width = w_px)
+    })
+
     output$expression_barplot <- renderPlot({
       if (input$plot_type == "heatmap") {
         target_genes <- input$genes_to_plot
@@ -633,21 +653,62 @@ processingServer <- function(id, rv) {
 
     output$download_expression_plot <- downloadHandler(
       filename = function() {
-        gene_names <- "selected_genes"
-        if (!is.null(input$genes_to_plot) && length(input$genes_to_plot) > 0) {
-          gene_names <- paste(input$genes_to_plot, collapse = "_")
-        }
+        gene_names <- if (!is.null(input$genes_to_plot) && length(input$genes_to_plot) > 0) paste(input$genes_to_plot, collapse = "_") else "selected_genes"
         paste0("expression_plot_", gene_names, "_", Sys.Date(), ".png")
       },
       content = function(file) {
         p <- expression_plot_object()
         req(p)
-        # Shiny UIで表示されているサイズと同じサイズでダウンロード
-        # plotOutputで width="800px", height="600px" と指定しているため、
-        # 800px / 75ppi ≈ 10.67 inches, 600px / 75ppi = 8 inches
-        plot_width <- 10.67
-        plot_height <- 8
-        ggsave(file, plot = p, device = "png", width = plot_width, height = plot_height, dpi = 75, limitsize = FALSE)
+        w <- if (!is.null(input$barplot_w) && !is.na(input$barplot_w)) input$barplot_w else 8
+        h <- if (!is.null(input$barplot_h) && !is.na(input$barplot_h)) input$barplot_h else 6
+        ggsave(file, plot = p, device = "png", width = w, height = h, dpi = 150)
+      }
+    )
+
+    output$download_expression_pdf <- downloadHandler(
+      filename = function() {
+        gene_names <- if (!is.null(input$genes_to_plot) && length(input$genes_to_plot) > 0) paste(input$genes_to_plot, collapse = "_") else "selected_genes"
+        paste0("expression_plot_", gene_names, "_", Sys.Date(), ".pdf")
+      },
+      content = function(file) {
+        w <- if (!is.null(input$barplot_w) && !is.na(input$barplot_w)) input$barplot_w else 8
+        h <- if (!is.null(input$barplot_h) && !is.na(input$barplot_h)) input$barplot_h else 6
+        if (!is.null(input$plot_type) && input$plot_type == "heatmap") {
+          target_genes <- input$genes_to_plot
+          req(length(target_genes) >= 2)
+          df <- display_table_reactive()
+          gene_col <- colnames(df)[1]
+          df_sub <- df[df[[gene_col]] %in% target_genes, ]
+          req(nrow(df_sub) > 0)
+          mat <- as.matrix(df_sub[, -1, drop = FALSE])
+          mat <- apply(mat, 2, as.numeric)
+          rownames(mat) <- make.unique(as.character(df_sub[[1]]))
+          meta <- rv$sample_metadata[rv$sample_metadata$active, ]
+          meta <- meta[order(meta$group, meta$current_name), ]
+          valid_samples <- intersect(meta$current_name, colnames(mat))
+          mat <- mat[, valid_samples, drop = FALSE]
+          anno <- data.frame(Group = meta$group)
+          rownames(anno) <- meta$current_name
+          anno <- anno[valid_samples, , drop = FALSE]
+          scale_val <- if (!is.null(input$hm1_scale)) input$hm1_scale else "row"
+          show_grp <- if (!is.null(input$hm1_show_group)) input$hm1_show_group else TRUE
+          main_title <- if (scale_val == "row") "Expression Heatmap (Z-score)" else "Expression Heatmap"
+          pdf(file, width = w, height = h)
+          pheatmap::pheatmap(mat,
+            scale = scale_val,
+            cluster_rows = if (!is.null(input$hm1_cluster_rows)) input$hm1_cluster_rows else TRUE,
+            cluster_cols = if (!is.null(input$hm1_cluster_cols)) input$hm1_cluster_cols else FALSE,
+            display_numbers = if (!is.null(input$hm1_display_numbers)) input$hm1_display_numbers else FALSE,
+            annotation_col = if (show_grp) anno else NA, show_colnames = TRUE,
+            color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+            border_color = NA, main = main_title
+          )
+          dev.off()
+        } else {
+          p <- expression_plot_object()
+          req(p)
+          ggsave(file, plot = p, device = "pdf", width = w, height = h)
+        }
       }
     )
 
@@ -704,6 +765,14 @@ processingServer <- function(id, rv) {
       list(mat = mat, anno = anno)
     })
 
+    output$custom_heatmap_area <- renderUI({
+      h_in <- if (!is.null(input$heatmap_h) && !is.na(input$heatmap_h)) input$heatmap_h else 8
+      w_in <- if (!is.null(input$heatmap_w) && !is.na(input$heatmap_w)) input$heatmap_w else 8
+      h_px <- paste0(round(h_in * 96), "px")
+      w_px <- paste0(round(w_in * 96), "px")
+      plotOutput(ns("custom_heatmap_plot"), height = h_px, width = w_px)
+    })
+
     output$custom_heatmap_plot <- renderPlot({
       res <- custom_heatmap_data()
       scale_val <- if (!is.null(input$hm2_scale)) input$hm2_scale else "row"
@@ -733,7 +802,9 @@ processingServer <- function(id, rv) {
       },
       content = function(file) {
         res <- custom_heatmap_data()
-        pdf(file, width = 8, height = 8)
+        w <- if (!is.null(input$heatmap_w) && !is.na(input$heatmap_w)) input$heatmap_w else 8
+        h <- if (!is.null(input$heatmap_h) && !is.na(input$heatmap_h)) input$heatmap_h else 8
+        pdf(file, width = w, height = h)
         scale_val <- if (!is.null(input$hm2_scale)) input$hm2_scale else "row"
         clus_rows <- if (!is.null(input$hm2_cluster_rows)) input$hm2_cluster_rows else TRUE
         clus_cols <- if (!is.null(input$hm2_cluster_cols)) input$hm2_cluster_cols else FALSE

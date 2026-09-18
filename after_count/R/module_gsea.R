@@ -38,7 +38,8 @@ gseaUI <- function(id) {
         radioButtons(ns("gsea_selection_method"), "遺伝子セット指定方法:",
           choices = c(
             "カテゴリから選択" = "category",
-            "キーワードで検索・選択" = "search"
+            "キーワードで検索・選択" = "search",
+            "カスタムアノテーション (eggNOG-mapper等)" = "custom_annot"
           ),
           selected = "category", inline = TRUE
         ),
@@ -72,6 +73,17 @@ gseaUI <- function(id) {
             )
           ),
           helpText("生物種を変更した場合、再度検索してください。利用可能な全遺伝子セットから検索します。")
+        ),
+        conditionalPanel(
+          condition = paste0("input['", ns("gsea_selection_method"), "'] == 'custom_annot'"),
+          selectInput(ns("gsea_custom_category"), "カスタムアノテーションのカテゴリ:",
+            choices = c(
+              "GO" = "go",
+              "KEGG Pathway" = "pathway",
+              "KEGG KO" = "ko"
+            ), selected = "go"
+          ),
+          helpText("データアップロード画面で読み込んだカスタムアノテーションを使用します。ID変換は行わず、DEG結果のIDをそのまま使用します。")
         ),
         # ★★★ UIの変更箇所 ★★★
         radioButtons(ns("gsea_rank_metric"), "ランキング指標 (DEG結果より):",
@@ -149,7 +161,7 @@ gseaServer <- function(id, rv) {
         updateSelectizeInput(session, "gsea_search_pathway_name",
           choices = unique_gs_names,
           selected = if (length(unique_gs_names) > 0) unique_gs_names[1] else NULL,
-          server = FALSE
+          server = TRUE
         )
         message(paste("GSEA: Updated pathway search choices for", input$gsea_species, "-", length(unique_gs_names), "unique set names loaded."))
       } else {
@@ -165,52 +177,59 @@ gseaServer <- function(id, rv) {
         shiny::need("Geneid" %in% colnames(deg_table_original_entrez), "DEG結果テーブルに 'Geneid' 列（EntrezIDを想定）が見つかりません。"),
         shiny::need(nrow(deg_table_original_entrez) > 0, "DEG結果テーブルが空です。")
       )
-      req(input$gsea_species)
-      message("GSEA: ID変換開始 (EntrezID -> Gene Symbol)...")
-      entrez_ids <- deg_table_original_entrez$Geneid
-      selected_gsea_species_name <- input$gsea_species
-      orgdb_pkg_name <- orgdb_pkg_map_gsea[[selected_gsea_species_name]]
-      shiny::validate(shiny::need(
-        !is.null(orgdb_pkg_name) && nzchar(orgdb_pkg_name),
-        paste0("選択された生物種 '", selected_gsea_species_name, "' に対応するOrgDbパッケージが見つかりません。")
-      ))
-      if (!requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
-        stop(paste0(
-          "GSEAのためのID変換には '", orgdb_pkg_name, "' パッケージが必要です。\n",
-          "インストールしてください: BiocManager::install('", orgdb_pkg_name, "')"
+      if (input$gsea_selection_method == "custom_annot") {
+        message("GSEA: カスタムアノテーションが選択されたため、Entrez->Symbol変換をスキップします。")
+        deg_table_symbol <- deg_table_original_entrez
+        deg_table_symbol$GeneSymbol <- deg_table_original_entrez$Geneid
+        has_duplicates_symbol <- any(duplicated(deg_table_symbol$GeneSymbol))
+      } else {
+        req(input$gsea_species)
+        message("GSEA: ID変換開始 (EntrezID -> Gene Symbol)...")
+        entrez_ids <- deg_table_original_entrez$Geneid
+        selected_gsea_species_name <- input$gsea_species
+        orgdb_pkg_name <- orgdb_pkg_map_gsea[[selected_gsea_species_name]]
+        shiny::validate(shiny::need(
+          !is.null(orgdb_pkg_name) && nzchar(orgdb_pkg_name),
+          paste0("選択された生物種 '", selected_gsea_species_name, "' に対応するOrgDbパッケージが見つかりません。")
         ))
-      }
-      orgdb_pkg <- get(orgdb_pkg_name)
-      gene_symbols_map <- tryCatch(
-        {
-          suppressMessages(AnnotationDbi::mapIds(orgdb_pkg,
-            keys = unique(as.character(entrez_ids)),
-            keytype = "ENTREZID",
-            column = "SYMBOL",
-            multiVals = "first"
+        if (!requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
+          stop(paste0(
+            "GSEAのためのID変換には '", orgdb_pkg_name, "' パッケージが必要です。\n",
+            "インストールしてください: BiocManager::install('", orgdb_pkg_name, "')"
           ))
-        },
-        error = function(e) {
-          showNotification(paste("ID変換エラー(Entrez->Symbol):", e$message), type = "error", duration = 10)
-          NULL
         }
-      )
-      shiny::validate(shiny::need(
-        !is.null(gene_symbols_map),
-        paste("EntrezIDからGene Symbolへの変換に失敗しました。")
-      ))
-      deg_table_symbol <- deg_table_original_entrez
-      deg_table_symbol$GeneSymbol <- gene_symbols_map[as.character(deg_table_symbol$Geneid)]
-      n_before_filter_symbol <- nrow(deg_table_symbol)
-      deg_table_symbol <- deg_table_symbol[!is.na(deg_table_symbol$GeneSymbol) & deg_table_symbol$GeneSymbol != "", ]
-      n_na_removed_symbol <- n_before_filter_symbol - nrow(deg_table_symbol)
-      if (n_na_removed_symbol > 0) {
-        message(paste("GSEA情報:", n_na_removed_symbol, "個のEntrezIDはGene Symbolに変換できず除外。"))
-      }
-      shiny::validate(shiny::need(nrow(deg_table_symbol) > 0, "Gene SymbolへのID変換後、有効な遺伝子が残りませんでした。"))
-      has_duplicates_symbol <- any(duplicated(deg_table_symbol$GeneSymbol))
-      if (has_duplicates_symbol) {
-        message("GSEA情報: 重複Gene Symbolあり。ランキング指標を平均化。")
+        orgdb_pkg <- get(orgdb_pkg_name)
+        gene_symbols_map <- tryCatch(
+          {
+            suppressMessages(AnnotationDbi::mapIds(orgdb_pkg,
+              keys = unique(as.character(entrez_ids)),
+              keytype = "ENTREZID",
+              column = "SYMBOL",
+              multiVals = "first"
+            ))
+          },
+          error = function(e) {
+            showNotification(paste("ID変換エラー(Entrez->Symbol):", e$message), type = "error", duration = 10)
+            NULL
+          }
+        )
+        shiny::validate(shiny::need(
+          !is.null(gene_symbols_map),
+          paste("EntrezIDからGene Symbolへの変換に失敗しました。")
+        ))
+        deg_table_symbol <- deg_table_original_entrez
+        deg_table_symbol$GeneSymbol <- gene_symbols_map[as.character(deg_table_symbol$Geneid)]
+        n_before_filter_symbol <- nrow(deg_table_symbol)
+        deg_table_symbol <- deg_table_symbol[!is.na(deg_table_symbol$GeneSymbol) & deg_table_symbol$GeneSymbol != "", ]
+        n_na_removed_symbol <- n_before_filter_symbol - nrow(deg_table_symbol)
+        if (n_na_removed_symbol > 0) {
+          message(paste("GSEA情報:", n_na_removed_symbol, "個のEntrezIDはGene Symbolに変換できず除外。"))
+        }
+        shiny::validate(shiny::need(nrow(deg_table_symbol) > 0, "Gene SymbolへのID変換後、有効な遺伝子が残りませんでした。"))
+        has_duplicates_symbol <- any(duplicated(deg_table_symbol$GeneSymbol))
+        if (has_duplicates_symbol) {
+          message("GSEA情報: 重複Gene Symbolあり。ランキング指標を平均化。")
+        }
       }
       metric_type <- input$gsea_rank_metric
       ranks_df <- NULL
@@ -293,6 +312,18 @@ gseaServer <- function(id, rv) {
         ))
 
         pathways[[selected_gs_name]] <- unique(target_pathway_genes)
+      } else if (input$gsea_selection_method == "custom_annot") {
+        req(input$gsea_custom_category)
+        custom_annots <- rv$custom_annotations
+        shiny::validate(shiny::need(!is.null(custom_annots), "カスタムアノテーションがアップロードされていません。データアップロード画面でファイルを選択してください。"))
+        
+        t2g <- switch(input$gsea_custom_category,
+                      "go" = custom_annots$go_t2g,
+                      "pathway" = custom_annots$pathway_t2g,
+                      "ko" = custom_annots$ko_t2g)
+        shiny::validate(shiny::need(!is.null(t2g) && nrow(t2g) > 0, "選択したカテゴリのカスタムアノテーションが存在しません。"))
+        
+        pathways <- split(t2g$gene, t2g$term)
       } else {
         shiny::validate("遺伝子セットの指定方法が選択されていません。")
       }
@@ -334,6 +365,8 @@ gseaServer <- function(id, rv) {
       req(gsea_output, gsea_output$results_table)
       dt <- datatable(gsea_output$results_table,
         rownames = FALSE,
+        style = "bootstrap5",
+        class = "table-hover table-sm",
         selection = "single",
         filter = "top",
         extensions = "Buttons",

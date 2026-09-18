@@ -69,6 +69,23 @@ detect_gene_id_type <- function(ids) {
   return("UNKNOWN")
 }
 
+infer_species_from_gene_ids <- function(ids) {
+  ids_clean <- na.omit(as.character(ids[ids != "" & !is.na(ids)]))
+  if (length(ids_clean) == 0) return(NULL)
+  n_sample <- min(length(ids_clean), 1000)
+  ids_sample <- sample(ids_clean, n_sample)
+  species_patterns <- c(
+    "Mus_musculus" = "^ENSMUSG",
+    "Homo_sapiens" = "^ENSG",
+    "Rattus_norvegicus" = "^ENSRNOG"
+  )
+  match_rates <- vapply(species_patterns, function(pattern) {
+    mean(grepl(pattern, ids_sample, ignore.case = TRUE))
+  }, numeric(1))
+  best_match <- names(which.max(match_rates))
+  if (length(best_match) == 1 && match_rates[[best_match]] > 0.8) best_match else NULL
+}
+
 convert_or_pass_ids <- function(original_ids, detected_keytype, selected_species_code) {
   if (selected_species_code == "Others_Original") {
     message("[ID_PROC_UPLOAD] Species is 'Others_Original'. Using original IDs directly.")
@@ -223,7 +240,7 @@ dataUploadMetadataServer <- function(id, rv) {
           
           geneid_lists <- map(file_paths, ~{
             dt_geneid <- fread(.x, header = TRUE, sep = "\t", stringsAsFactors = FALSE, select = c(1), na.strings = c("NA", "NaN", ""))
-            validate(need(ncol(dt_geneid) >= 1, paste(basename(.x),"の1列目(Geneid)がありません。")))
+            shiny::validate(shiny::need(ncol(dt_geneid) >= 1, paste(basename(.x),"の1列目(Geneid)がありません。")))
             dt_geneid[[1]] # Return as vector
           })
           
@@ -232,6 +249,14 @@ dataUploadMetadataServer <- function(id, rv) {
           
           all_original_geneids <- Reduce(intersect, geneid_lists)
           if(length(all_original_geneids) == 0) stop("共通のGeneIDが見つかりませんでした。")
+          inferred_species_code <- infer_species_from_gene_ids(all_original_geneids)
+          if (!is.null(inferred_species_code) && inferred_species_code != species_code && species_code != "Others_Original") {
+            message(paste0("Detected Ensembl species '", inferred_species_code, "'. Overriding selected species '", species_code, "' for ID conversion."))
+            species_code <- inferred_species_code
+            rv$selected_species <- species_code
+            updateSelectInput(session, "species", selected = species_code)
+            showNotification("入力Gene IDから生物種を自動補正しました。", type = "message", duration = 6)
+          }
           
           conversion_res <- convert_or_pass_ids(all_original_geneids, detected_keytype, species_code)
           rv$current_gene_id_type(conversion_res$final_id_type)
@@ -351,6 +376,14 @@ dataUploadMetadataServer <- function(id, rv) {
           # ID変換処理
           original_ids <- rownames(clean_mat)
           detected_keytype <- detect_gene_id_type(original_ids)
+          inferred_species_code <- infer_species_from_gene_ids(original_ids)
+          if (!is.null(inferred_species_code) && inferred_species_code != species_code && species_code != "Others_Original") {
+            message(paste0("Detected Ensembl species '", inferred_species_code, "'. Overriding selected species '", species_code, "' for ID conversion."))
+            species_code <- inferred_species_code
+            rv$selected_species <- species_code
+            updateSelectInput(session, "species", selected = species_code)
+            showNotification("入力Gene IDから生物種を自動補正しました。", type = "message", duration = 6)
+          }
           
           if (species_code != "Others_Original") {
             message(paste0("Matrix Input: Detected ID type '", detected_keytype, "'. Converting to Entrez..."))
@@ -464,7 +497,7 @@ dataUploadMetadataServer <- function(id, rv) {
     plot_data <- reactive({
       req(rv$merged_data, rv$sample_metadata)
       act_meta <- rv$sample_metadata[rv$sample_metadata$active, , drop=FALSE]
-      validate(need(nrow(act_meta) > 0, "プロット対象のサンプルがありません。"))
+      shiny::validate(shiny::need(nrow(act_meta) > 0, "プロット対象のサンプルがありません。"))
       cols <- intersect(act_meta$current_name, colnames(rv$merged_data))
       if(length(cols) == 0) return(NULL)
       num_dat <- rv$merged_data[, cols, drop=FALSE]

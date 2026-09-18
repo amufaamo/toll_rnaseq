@@ -34,7 +34,9 @@ filteringUI <- function(id) {
           helpText(icon("question-circle"), " サンプル数が多い場合に min.prop を適用する基準数"),
           sliderInput(ns("min_prop"), "Minimum Proportion (min.prop)", value = 0.7, min = 0, max = 1, step = 0.05),
           helpText(icon("question-circle"), " 少なくとも min.count を満たすべきサンプルの割合")
-      )
+      ),
+      # GTFアノテーションがある場合のみ表示される biotype フィルタ
+      uiOutput(ns("biotypeFilterUI"))
     ),
     mainPanel(
       width = 8,
@@ -54,6 +56,22 @@ filteringServer <- function(id, rv) {
     # Show/hide the parameter panel based on the radio button selection
     observe({
       shinyjs::toggle(id = "filtering_params", condition = input$perform_filtering == "yes")
+    })
+
+    # GTFアノテーション由来の biotype フィルタ UI (アノテーションがある時のみ)
+    output$biotypeFilterUI <- renderUI({
+      ann <- rv$gene_annotation
+      if (is.null(ann) || !"biotype" %in% colnames(ann)) return(NULL)
+      bts <- sort(unique(ann$biotype))
+      if (length(bts) <= 1) return(NULL)
+      tagList(
+        hr(),
+        h4(icon("dna"), "Biotype フィルタ"),
+        helpText(icon("info-circle"), " GTFのgene_biotypeで遺伝子を絞り込みます (デフォルト=全選択)。"),
+        selectizeInput(session$ns("biotype_filter"), "残すbiotype:",
+                       choices = bts, selected = bts, multiple = TRUE,
+                       options = list(plugins = list("remove_button")))
+      )
     })
     
     filtering_results <- reactive({
@@ -96,7 +114,22 @@ filteringServer <- function(id, rv) {
         shiny::validate(shiny::need(!is.null(keep), "フィルタリングの計算でエラーが発生しました。入力データまたはパラメータを確認してください。"))
         shiny::validate(shiny::need(sum(keep) > 0, "フィルタリングの結果、すべての遺伝子が除外されました。パラメータ（min.count等）を下げてください。"))
       }
-      
+
+      # biotype フィルタ (GTFアノテーションがあり、かつ一部biotypeが選択された場合のみ)
+      ann <- rv$gene_annotation
+      selected_biotypes <- input$biotype_filter
+      if (!is.null(ann) && "biotype" %in% colnames(ann) && !is.null(selected_biotypes)) {
+        all_biotypes <- unique(ann$biotype)
+        # 全選択(=絞り込み無し)の場合はスキップ
+        if (length(selected_biotypes) > 0 && !setequal(selected_biotypes, all_biotypes)) {
+          ann_lut <- setNames(as.character(ann$biotype), as.character(ann$Geneid))
+          row_biotypes <- ann_lut[rownames(count_matrix)]
+          biotype_keep <- !is.na(row_biotypes) & row_biotypes %in% selected_biotypes
+          keep <- keep & biotype_keep
+          shiny::validate(shiny::need(sum(keep) > 0, "biotypeフィルタの結果、遺伝子が残りませんでした。選択biotypeを増やしてください。"))
+        }
+      }
+
       n_genes_after <- sum(keep)
       kept_genes_ratio <- round(mean(keep) * 100, 1)
       

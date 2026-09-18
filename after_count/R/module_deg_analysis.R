@@ -72,75 +72,87 @@ degAnalysisUI <- function(id) {
   sidebarLayout(
     sidebarPanel(
       width = 4,
-      # ★★★ UIの変更箇所 ★★★
-      # ★★★ UIの変更箇所 ★★★
-      h4(icon("cogs"), "解析手法の設定"),
-      radioButtons(ns("deg_method"), "統計アルゴリズム:",
-        choices = c("edgeR (推奨)" = "edgeR", "DESeq2 (頑健性高)" = "DESeq2"),
-        selected = "edgeR", inline = TRUE
-      ),
-      helpText(icon("info-circle"), " edgeRは処理が高速です。DESeq2はサンプル数が多い場合や外れ値により頑健です。"),
-      hr(),
-      radioButtons(ns("analysis_type"), "解析タイプ:",
-        choices = c("標準比較 (Pairwise / Interaction)" = "std", "多群比較 (LRT: ANOVA-like)" = "lrt"),
-        selected = "std", inline = TRUE
-      ),
-      tags$div(class = "alert alert-warning", style = "padding: 10px;",
-        icon("lightbulb"), HTML(" <b>標準比較:</b> 指定した2群の差、または要因間の相互作用を解析します。<br><b>多群比較 (LRT):</b> 3群以上をまたいで、どこかに有意差がある遺伝子を検出します。")
-      ),
-      hr(),
-      h4("比較グループ選択"),
-      uiOutput(ns("degGroupSelectionUI")),
-      hr(),
-      h4("バッチ補正 (任意)"),
-      checkboxInput(ns("use_batch"), "バッチ補正を行う (Include Batch in model)", value = FALSE),
-      conditionalPanel(
-        condition = paste0("input['", ns("use_batch"), "'] == true"),
-        selectInput(ns("batch_col"), "バッチ項の列 (Batch column):", choices = NULL)
-      ),
-      hr(),
-      h4(icon("filter"), "フィルタリング閾値"),
-      helpText(icon("question-circle"), " 以下の閾値は、表示されるテーブルとプロットに適用されます。結果の出力範囲が変わります。"),
-      radioButtons(ns("sig_metric"), "有意差の指標:",
-        choices = c(
-          "FDR (adjusted P-value)" = "FDR",
-          "P-value" = "PValue"
+      accordion(
+        open = c("group_settings", "thresholds"),
+
+        accordion_panel(
+          title = "比較グループ設定",
+          value = "group_settings",
+          icon  = icon("users"),
+          radioButtons(ns("analysis_type"), "解析タイプ:",
+            choices = c("標準比較 (Pairwise / Interaction)" = "std", "多群比較 (LRT: ANOVA-like)" = "lrt"),
+            selected = "std", inline = TRUE
+          ),
+          tags$div(class = "alert alert-warning", style = "padding: 8px; font-size: 0.85rem;",
+            icon("lightbulb"), HTML(" <b>標準比較:</b> 2群比較・相互作用。<b>多群比較 (LRT):</b> 3群以上のANOVA的検定。")
+          ),
+          uiOutput(ns("degGroupSelectionUI"))
         ),
-        selected = "FDR", inline = TRUE
-      ),
-      conditionalPanel(
-        condition = paste0("input['", ns("sig_metric"), "'] == 'FDR'"),
-        numericInput(ns("degFDR"), "FDR 閾値:", value = 0.05, min = 0, max = 1, step = 0.01)
-      ),
-      conditionalPanel(
-        condition = paste0("input['", ns("sig_metric"), "'] == 'PValue'"),
-        numericInput(ns("degPValue"), "P-value 閾値:", value = 0.05, min = 0, max = 1, step = 0.01)
-      ),
-      numericInput(ns("degLogFC"), "Log2 Fold Change 閾値 (|LogFC| >):", value = 1, min = 0, step = 0.1),
-      hr(),
-      actionButton(ns("runDEG"), "DEG解析実行", icon = icon("play")),
-      hr(),
-      conditionalPanel(
-        condition = paste0("input['", ns("analysis_type"), "'] == 'std'"),
-        h4("ボルケーノプロット設定 (任意)"),
-        uiOutput(ns("highlightGenesUI")),
-        hr()
-      ),
-      h4("表示IDタイプ選択"),
-      selectInput(ns("deg_id_display_type"), "結果テーブルの遺伝子IDタイプ:",
-        choices = c("Gene Symbol" = "SYMBOL", "Entrez ID (内部ID)" = "ENTREZID"),
-        selected = "SYMBOL"
-      ),
-      hr(),
-      h4("結果ダウンロード"),
-      p("DEG解析結果の全遺伝子リスト（フィルタリングなし）をダウンロードします。"),
-      downloadButton(ns("downloadExcelResults"), "Excel形式でダウンロード (.xlsx)", icon = icon("file-excel")),
-      br(), br(),
-      downloadButton(ns("downloadCsvResults"), "CSV形式でダウンロード (.csv)", icon = icon("file-csv"))
+
+        accordion_panel(
+          title = "解析手法・バッチ補正",
+          value = "method_settings",
+          icon  = icon("cogs"),
+          radioButtons(ns("deg_method"), "統計アルゴリズム:",
+            choices = c("edgeR (推奨)" = "edgeR", "DESeq2 (頑健性高)" = "DESeq2"),
+            selected = "edgeR", inline = TRUE
+          ),
+          helpText(icon("info-circle"), " edgeRは高速。DESeq2はサンプル数が多い場合により頑健。"),
+          hr(),
+          checkboxInput(ns("use_batch"), "バッチ補正を行う (Include Batch in model)", value = FALSE),
+          conditionalPanel(
+            condition = paste0("input['", ns("use_batch"), "'] == true"),
+            selectInput(ns("batch_col"), "バッチ項の列 (Batch column):", choices = NULL)
+          )
+        ),
+
+        accordion_panel(
+          title = "フィルタリング閾値",
+          value = "thresholds",
+          icon  = icon("filter"),
+          helpText(icon("question-circle"), " 以下の閾値はテーブルとプロットに即時反映されます。"),
+          radioButtons(ns("sig_metric"), "有意差の指標:",
+            choices = c("FDR (adjusted P-value)" = "FDR", "P-value" = "PValue"),
+            selected = "FDR", inline = TRUE
+          ),
+          conditionalPanel(
+            condition = paste0("input['", ns("sig_metric"), "'] == 'FDR'"),
+            numericInput(ns("degFDR"), "FDR 閾値:", value = 0.05, min = 0, max = 1, step = 0.01)
+          ),
+          conditionalPanel(
+            condition = paste0("input['", ns("sig_metric"), "'] == 'PValue'"),
+            numericInput(ns("degPValue"), "P-value 閾値:", value = 0.05, min = 0, max = 1, step = 0.01)
+          ),
+          numericInput(ns("degLogFC"), "Log2 Fold Change 閾値 (|LogFC| >):", value = 1, min = 0, step = 0.1)
+        ),
+
+        accordion_panel(
+          title = "実行・ダウンロード",
+          value = "run_download",
+          icon  = icon("play"),
+          actionButton(ns("runDEG"), "DEG解析実行", icon = icon("play"), class = "btn-primary w-100"),
+          hr(),
+          conditionalPanel(
+            condition = paste0("input['", ns("analysis_type"), "'] == 'std'"),
+            h6("ボルケーノプロット: ハイライト遺伝子 (任意)"),
+            uiOutput(ns("highlightGenesUI")),
+            hr()
+          ),
+          selectInput(ns("deg_id_display_type"), "結果テーブルの遺伝子IDタイプ:",
+            choices = c("Gene Symbol" = "SYMBOL", "Entrez ID (内部ID)" = "ENTREZID"),
+            selected = "SYMBOL"
+          ),
+          p(class = "text-muted small", "全遺伝子リスト（フィルタリングなし）をダウンロード:"),
+          downloadButton(ns("downloadExcelResults"), "Excel (.xlsx)", icon = icon("file-excel"), class = "btn-sm w-100 mb-1"),
+          br(),
+          downloadButton(ns("downloadCsvResults"), "CSV (.csv)", icon = icon("file-csv"), class = "btn-sm w-100")
+        )
+      )
     ),
     mainPanel(
       width = 8,
       h4("解析サマリー"),
+      uiOutput(ns("summary_boxes_ui")),
       withSpinner(verbatimTextOutput(ns("degSummary")), type = 6),
       hr(),
       conditionalPanel(
@@ -187,37 +199,47 @@ degAnalysisServer <- function(id, rv) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # --- 名前空間衝突の解消 (ローカル束縛) ---
+    # Shiny の loadSupport が R/ を自動再ソースし、AnnotationDbi/S4Vectors 等の
+    # library() が app.R のグローバル再束縛後に dplyr の動詞を再び上書きするため、
+    # モジュール実行環境(クロージャ)内で dplyr 版をローカルに束縛して確実に最優先化する。
+    select <- dplyr::select
+    rename <- dplyr::rename
+    filter <- dplyr::filter
+    mutate <- dplyr::mutate
+    arrange <- dplyr::arrange
+    slice  <- dplyr::slice
+
     detected_deg_input_id_type <- reactiveVal("ENTREZID")
+    # 表示IDタイプの選択肢: GTFアップロード時は rv$gtf_id_choices を、無ければ既定3択を使う
+    deg_id_choices <- function() {
+      ch <- rv$gtf_id_choices
+      if (is.null(ch)) ch <- gtf_display_id_choices(NULL)
+      ch
+    }
     observeEvent(rv$merged_data, {
       req(rv$merged_data)
       detected_deg_input_id_type("ENTREZID")
-      updateSelectInput(session, "deg_id_display_type",
-        choices = c("Gene Symbol" = "SYMBOL", "Entrez ID (内部ID)" = "ENTREZID", "Gene Name" = "GENENAME"),
-        selected = "SYMBOL"
-      )
+      ch <- deg_id_choices()
+      updateSelectInput(session, "deg_id_display_type", choices = ch$choices, selected = ch$selected)
     })
+    # GTFが (カウントデータの後に) アップロード/変更されたら表示IDタイプの選択肢も追従させる
+    observeEvent(rv$gtf_id_choices, {
+      ch <- deg_id_choices()
+      updateSelectInput(session, "deg_id_display_type", choices = ch$choices, selected = ch$selected)
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
+    # 共通ヘルパー annotate_display_ids に委譲 (GTFアノテーション優先 -> OrgDb -> 生ID)
     convert_entrez_ids_for_display <- function(entrez_ids, target_display_type, selected_species_code) {
       if (target_display_type == "ENTREZID" || is.null(target_display_type) || !nzchar(target_display_type)) {
         return(as.character(entrez_ids))
       }
-      req(selected_species_code)
-      orgdb_pkg_name <- orgdb_species_map[[selected_species_code]]
-      if (is.null(orgdb_pkg_name) || !requireNamespace(orgdb_pkg_name, quietly = TRUE)) {
+      # 生物種未設定 (例: 外部DE結果アップロードで species 未指定) のときは
+      # ID変換せず元のGeneidをそのまま表示する (req で停止させない)。
+      if (is.null(selected_species_code) || !nzchar(selected_species_code)) {
         return(as.character(entrez_ids))
       }
-      org_db <- get(orgdb_pkg_name)
-      if (!target_display_type %in% columns(org_db) || !"ENTREZID" %in% keytypes(org_db)) {
-        return(as.character(entrez_ids))
-      }
-      unique_entrez_keys <- unique(as.character(entrez_ids))
-      converted_map <- tryCatch(suppressMessages(mapIds(org_db, keys = unique_entrez_keys, column = target_display_type, keytype = "ENTREZID", multiVals = "first")), error = function(e) NULL)
-      if (is.null(converted_map)) {
-        return(as.character(entrez_ids))
-      }
-      final_converted_ids <- converted_map[as.character(entrez_ids)]
-      na_indices <- is.na(final_converted_ids)
-      if (any(na_indices)) final_converted_ids[na_indices] <- paste0(as.character(entrez_ids[na_indices]), " (変換不可)")
-      return(as.character(final_converted_ids))
+      annotate_display_ids(entrez_ids, target_display_type, selected_species_code,
+                           gene_annotation = rv$gene_annotation, orgdb_map = orgdb_species_map)
     }
 
     output$degGroupSelectionUI <- renderUI({
@@ -627,15 +649,127 @@ degAnalysisServer <- function(id, rv) {
           }
         },
         error = function(e) {
-          showNotification(paste("DEG解析エラー:", e$message), type = "error", duration = 15)
+          call_str <- tryCatch(paste(deparse(conditionCall(e)), collapse = " "), error = function(e2) "(unknown call)")
+          message("DEG解析エラー詳細 - call: ", call_str, " / message: ", e$message)
+          showNotification(paste0("DEG解析エラー: ", e$message, "\n[発生箇所: ", call_str, "]"), type = "error", duration = 20)
           NULL
         }
       )
       rv$deg_results <- deg_results_list
     })
 
-    # (以降のコードは変更なし)
-    # ... (output$degSummary から下のコードは元のままでOK) ...
+    # === アップロードした DE 結果表を読み込み rv$deg_results に流し込む =========
+    # カウント再計算なしで DESeq2_all / edgeR の結果表を直接受け取り、
+    # 既存の Volcano/MA・結果表・下流タブ(GSEA/GO)で利用できる形に整形する。
+    # 列名は .fe_find_col で大小無視の自動検出 (module_figure_enrichment.R のヘルパを再利用)。
+    observeEvent(input$loadUploadedDE, {
+      req(input$uploadDE)
+      df <- .fe_read_table(input$uploadDE$datapath)
+      shiny::validate(shiny::need(!is.null(df) && nrow(df) > 0, "ファイルを読み込めませんでした (空または不正な形式)。"))
+
+      id_col   <- .fe_find_col(df, c("Geneid", "gene", "gene_id", "ID", "GeneSymbol"))
+      lfc_col  <- .fe_find_col(df, c("log2FoldChange", "logFC", "log2FC"))
+      p_col    <- .fe_find_col(df, c("pvalue", "PValue", "p.value", "P.Value"))
+      fdr_col  <- .fe_find_col(df, c("padj", "FDR", "adj.P.Val", "p.adjust", "qvalue"))
+      base_col <- .fe_find_col(df, c("baseMean", "logCPM", "AveExpr"))
+      stat_col <- .fe_find_col(df, c("stat", "t", "F", "LR"))
+      lfcse_col <- .fe_find_col(df, c("lfcSE"))
+
+      shiny::validate(
+        shiny::need(!is.null(id_col),  "遺伝子ID列 (Geneid 等) が見つかりません。"),
+        shiny::need(!is.null(lfc_col), "log2FoldChange / logFC 列が見つかりません。"),
+        shiny::need(!is.null(p_col) || !is.null(fdr_col), "pvalue または padj 列が見つかりません。")
+      )
+
+      res_df <- data.frame(Geneid = as.character(df[[id_col]]), stringsAsFactors = FALSE)
+      res_df$logFC <- suppressWarnings(as.numeric(df[[lfc_col]]))
+      if (!is.null(base_col))  res_df$baseMean <- suppressWarnings(as.numeric(df[[base_col]]))
+      if (!is.null(lfcse_col)) res_df$lfcSE    <- suppressWarnings(as.numeric(df[[lfcse_col]]))
+      if (!is.null(stat_col))  res_df$stat     <- suppressWarnings(as.numeric(df[[stat_col]]))
+      res_df$PValue <- if (!is.null(p_col)) suppressWarnings(as.numeric(df[[p_col]])) else NA_real_
+      res_df$FDR    <- if (!is.null(fdr_col)) suppressWarnings(as.numeric(df[[fdr_col]])) else NA_real_
+      # padj列が無い場合は p値から BH 補正で補完
+      if (is.null(fdr_col) && !is.null(p_col)) res_df$FDR <- p.adjust(res_df$PValue, method = "BH")
+      res_df$FDR[is.na(res_df$FDR)] <- 1
+      res_df <- res_df[!is.na(res_df$Geneid) & nzchar(res_df$Geneid), , drop = FALSE]
+      shiny::validate(shiny::need(nrow(res_df) > 0, "有効な遺伝子行がありません。"))
+
+      # --- 比較ラベル: ファイル名から自動抽出し、テキスト欄があれば上書き ---
+      base_name <- tools::file_path_sans_ext(input$uploadDE$name)
+      base_name <- sub("_(deseq2|edger)?_?(all|results|res)$", "", base_name, ignore.case = TRUE)
+      tgt <- "Group1"; ref <- "Group2"
+      if (grepl("_vs_", base_name, ignore.case = TRUE)) {
+        parts <- strsplit(base_name, "(?i)_vs_", perl = TRUE)[[1]]
+        if (length(parts) >= 2) {
+          tgt <- sub("^[Cc][0-9]+_", "", parts[1])  # 先頭の contrast プレフィックス (C1_ 等) 除去
+          ref <- parts[2]
+        }
+      }
+      if (!is.null(input$up_target)    && nzchar(trimws(input$up_target)))    tgt <- trimws(input$up_target)
+      if (!is.null(input$up_reference) && nzchar(trimws(input$up_reference))) ref <- trimws(input$up_reference)
+
+      # --- 現在の閾値で有意遺伝子を算出 ---
+      sig_metric_val <- if (input$sig_metric == "FDR") input$degFDR else input$degPValue
+      logfc_val <- input$degLogFC
+      sig_col_name <- input$sig_metric
+      up_genes <- res_df %>%
+        filter(!is.na(!!sym(sig_col_name)), !!sym(sig_col_name) < sig_metric_val, !is.na(logFC), logFC > logfc_val) %>%
+        pull(Geneid) %>% unique()
+      down_genes <- res_df %>%
+        filter(!is.na(!!sym(sig_col_name)), !!sym(sig_col_name) < sig_metric_val, !is.na(logFC), logFC < -logfc_val) %>%
+        pull(Geneid) %>% unique()
+
+      rv$deg_results <- list(
+        normalized_counts = NULL,
+        analysis_method = "DESeq2", analysis_type = "pairwise",
+        deseq_res = NULL,
+        top_tags = list(table = res_df),
+        comparison = c(tgt, ref),
+        significant_up_genes = up_genes, significant_down_genes = down_genes,
+        significant_genes = c(up_genes, down_genes),
+        background_genes_original = res_df$Geneid,
+        metric_at_run = sig_col_name,
+        sig_threshold_at_run = sig_metric_val,
+        logfc_threshold_at_run = logfc_val,
+        status = "analysis_completed", source = "upload"
+      )
+      rv$background_genes_original <- res_df$Geneid
+
+      showNotification(
+        sprintf("DE結果を読み込みました: %d 遺伝子 / 比較 '%s vs %s' / Up %d, Down %d",
+                nrow(res_df), tgt, ref, length(up_genes), length(down_genes)),
+        type = "message", duration = 8
+      )
+    })
+
+    output$summary_boxes_ui <- renderUI({
+      req(rv$deg_results, rv$deg_results$status == "analysis_completed")
+      res <- rv$deg_results
+      is_lrt <- !is.null(res$analysis_type) && res$analysis_type == "lrt"
+
+      if (is_lrt) {
+        res_table <- as.data.frame(res$top_tags$table)
+        n_sig <- sum(res_table[[res$metric_at_run]] < res$sig_threshold_at_run, na.rm = TRUE)
+        layout_columns(
+          fill = FALSE,
+          value_box(title = "Significant Genes", value = n_sig,
+                    showcase = icon("dna"), theme = "primary"),
+          value_box(title = "Tested Genes", value = nrow(res_table),
+                    showcase = icon("list"), theme = "secondary")
+        )
+      } else {
+        layout_columns(
+          fill = FALSE,
+          value_box(title = "Up-regulated", value = length(res$significant_up_genes),
+                    showcase = icon("arrow-trend-up"), theme = "danger"),
+          value_box(title = "Down-regulated", value = length(res$significant_down_genes),
+                    showcase = icon("arrow-trend-down"), theme = "info"),
+          value_box(title = "Tested Genes", value = length(res$background_genes_original),
+                    showcase = icon("dna"), theme = "secondary")
+        )
+      }
+    })
+
     output$degSummary <- renderPrint({
       req(rv$deg_results, rv$deg_results$status == "analysis_completed")
       res <- rv$deg_results
@@ -684,7 +818,7 @@ degAnalysisServer <- function(id, rv) {
     })
 
     filtered_and_converted_table <- reactive({
-      req(rv$deg_results, input$deg_id_display_type, rv$selected_species)
+      req(rv$deg_results, input$deg_id_display_type)
       res_table <- as.data.frame(rv$deg_results$top_tags$table)
 
       sig_metric_filter <- input$sig_metric
@@ -747,7 +881,7 @@ degAnalysisServer <- function(id, rv) {
         plotMD(res$qlf, status = status_vec, values = c(1, -1), col = c("red", "blue"), legend = "topright", main = plot_title)
         abline(h = c(-logfc_threshold_plot, logfc_threshold_plot), col = "dodgerblue", lty = 2)
       } else { # DESeq2
-        req(res$deseq_res)
+        req(res$top_tags$table)
         res_df <- as.data.frame(res$top_tags$table)
         sig_metric_plot <- input$sig_metric
         sig_threshold_plot <- if (sig_metric_plot == "FDR") input$degFDR else input$degPValue
@@ -780,7 +914,7 @@ degAnalysisServer <- function(id, rv) {
     })
 
     volcano_data_reactive <- reactive({
-      req(rv$deg_results, input$deg_id_display_type, rv$selected_species)
+      req(rv$deg_results, input$deg_id_display_type)
       is_lrt <- !is.null(rv$deg_results$analysis_type) && rv$deg_results$analysis_type == "lrt"
       is_int <- !is.null(rv$deg_results$analysis_type) && rv$deg_results$analysis_type == "interaction"
       if (is_lrt) {
@@ -957,6 +1091,11 @@ degAnalysisServer <- function(id, rv) {
     kmeans_data_shared <- reactive({
       req(rv$deg_results)
       res <- rv$deg_results
+      # 外部DE結果アップロード時はカウント行列(normalized_counts)が無いため
+      # K-meansクラスタリングは不可。NULLを返してプレースホルダ表示にする。
+      if (is.null(res$normalized_counts)) {
+        return(NULL)
+      }
       sig_genes <- res$significant_genes
       if (length(sig_genes) < 2) {
         return(NULL)

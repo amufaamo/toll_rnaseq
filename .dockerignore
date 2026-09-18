@@ -1,0 +1,5 @@
+R_v3_backup/
+after_count_stable_*/
+*.bak*
+.git/
+*.RData

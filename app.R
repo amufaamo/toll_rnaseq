@@ -1,9 +1,9 @@
-# EasyRNA-Seq Integrated App (Upstream + Downstream)
-
+# EasyRNA-Seq Integrated App (Upstream + Downstream) - Version 3.0
 options(shiny.maxRequestSize = 10000 * 1024^2) # 10GB Upload Limit
 
 # --- Libraries ---
 library(shiny)
+library(bslib)
 library(shinyFiles)
 library(shinyWidgets)
 library(processx)
@@ -39,6 +39,7 @@ source("before_count/EasyRNASeq_Preprocessor/docker_wrapper.R")
 source("before_count/EasyRNASeq_Preprocessor/R/utils.R")
 
 required_after <- c(
+  "after_count/R/gtf_utils.R",  # GTFパース + 共通ID表示変換ヘルパー (他モジュールが使用)
   "after_count/R/module_data_upload_metadata_new.R",
   "after_count/R/module_filtering.R",
   "after_count/R/module_processing.R",
@@ -46,191 +47,997 @@ required_after <- c(
   "after_count/R/module_deg_analysis.R",
   "after_count/R/module_gsea.R",
   "after_count/R/module_go_enrichment_integrated.R",
-  "after_count/R/module_timeseries_analysis.R"
+  "after_count/R/module_timeseries_analysis.R",
+  "after_count/R/module_deconvolution.R",
+  "after_count/R/module_gene_barplot_swap.R",
+  "after_count/R/module_figure_enrichment.R"
 )
 for (m in required_after) source(m)
 
 # --- UI Definition ---
-ui <- navbarPage(
-    title = "EasyRNA-Seq Integrated Platform v2.0",
-    id = "main_nav",
-    windowTitle = "EasyRNA-Seq",
-    header = tags$style(HTML("
-      /* Custom CSS */
-      .navbar-brand { font-weight: bold; font-size: 22px; }
-    ")),
+ui <- page_sidebar(
+  title = NULL,
+  theme = bs_theme(
+    version = 5,
+    primary = "#2563eb",
+    secondary = "#6b7280",
+    bg = "#ffffff",
+    fg = "#111827",
+    base_font = font_google("Inter")
+  ),
+  fillable = FALSE,
+  
+  # Inject Custom CSS and JavaScript in header
+  header = tagList(
     shinyjs::useShinyjs(),
-
-    navbarMenu("Upstream Analysis (Read Count)", icon = icon("cogs"),
-        # Tab 1: Reference Preparation
-        tabPanel(
-            "1. Reference Prep",
-            sidebarLayout(
-                sidebarPanel(
-                    h4("Create Index"),
-                    
-                    radioButtons("index_type", "Index Type:", choices = c("Salmon (Transcriptome)" = "salmon", "STAR (Genome)" = "star"), inline = TRUE),
-                    numericInput("ref_threads", "Threads", value = 4, min = 1, max = 32),
-                    
-                    radioButtons("ref_mode", "Source:", 
-                                 choices = c("Local File" = "local", "URL Download" = "url", "Upload (Drag&Drop)" = "upload"), 
-                                 inline = TRUE),
-                    
-                    # --- Local Mode ---
-                    conditionalPanel(
-                        condition = "input.ref_mode == 'local'",
-                        shinyDirButton("ref_fasta_dir", "Select Fasta Folder", "Select folder containing Reference Fasta"),
-                        textOutput("ref_fasta_path_display", inline = TRUE),
-                        br(), br(),
-                        h5("Select Reference Fasta (Transcriptome)"),
-                        selectInput("ref_fasta_file", "Fasta File", choices = NULL),
-                        uiOutput("ref_warning_ui"),
-                        h5("Select GTF/GFF Annotation (Optional for Index, Used later)"),
-                        shinyDirButton("ref_gtf_dir", "Select GTF Folder", "Select folder containing GTF"),
-                        selectInput("ref_gtf_file", "GTF File", choices = NULL)
-                    ),
-    
-                    # --- URL Mode ---
-                    conditionalPanel(
-                        condition = "input.ref_mode == 'url'",
-                        textInput("url_fasta", "Fasta URL", placeholder = "https://example.com/transcriptome.fa.gz"),
-                        textInput("url_gtf", "GTF URL (Optional)", placeholder = "https://example.com/annotation.gtf.gz"),
-                        h5("Download Destination"),
-                        shinyDirButton("download_dest_dir", "Select Folder", "Select folder to save downloaded/uploaded files"),
-                        textOutput("download_dest_display"),
-                        br(), br()
-                    ),
-    
-                    # --- Upload Mode ---
-                    conditionalPanel(
-                        condition = "input.ref_mode == 'upload'",
-                        fileInput("upload_fasta", "Upload Fasta (Transcriptome)", accept = c(".fa", ".fasta", ".fna", ".gz")),
-                        fileInput("upload_gtf", "Upload GTF (Optional)", accept = c(".gtf", ".gff", ".gff3", ".gz")),
-                        p("Files will be saved to the destination folder below:"),
-                        shinyDirButton("upload_dest_dir", "Select Destination Folder", "Folder to save uploaded files"),
-                        textOutput("upload_dest_display"),
-                        br(), br()
-                    ),
-                    
-                    hr(),
-                    textInput("index_output_name", "Index Folder Name", value = "index_out"),
-                    actionButton("btn_make_index", "Process & Create Index", class = "btn-primary", icon = icon("dna")),
-                    br(), br(),
-                    uiOutput("index_status_ui"),
-                    hr(),
-                    h5("Docker Status:"),
-                    textOutput("docker_status")
-                ),
-                mainPanel(
-                    h4("Console Output"),
-                    verbatimTextOutput("log_ref")
-                )
-            )
-        ),
-    
-        # Tab 2: QC & Quantification
-        tabPanel(
-            "2. QC & Quant",
-            sidebarLayout(
-                sidebarPanel(
-                    h4("Analyze Samples"),
-    
-                    # Inputs
-                    radioButtons("quant_method", "Quantification Method:", choices = c("Salmon", "STAR + featureCounts"), inline = TRUE),
-                    h5("1. FASTQ Directory"),
-                    shinyDirButton("fastq_dir", "Select Data Folder", "Select folder with FASTQ files"),
-                    textOutput("fastq_dir_display"),
-                    h5("2. Index Directory"),
-                    shinyDirButton("index_dir_select", "Select Index Folder", "Select Index Folder"),
-                    textOutput("index_dir_display"),
-                    h5("3. Annotation (GTF)"),
-                    textOutput("gtf_path_display_t2"),
-                    p("Use GTF selected in Tab 1, or enter path:"),
-                    textInput("manual_gtf_path", "Absolute Path to GTF", placeholder = "/path/to/genes.gtf"),
-                    fileInput("upload_gtf_t2", "Or Upload GTF (Drag & Drop)", accept = c(".gtf", ".gff", ".gff3", ".gz")),
-                    h5("4. Settings"),
-                    numericInput("threads", "Threads", value = 4, min = 1, max = 32),
-                    checkboxInput("t2_run_multiqc", "Run MultiQC Report", value = TRUE),
-                    h5("5. Output Directory"),
-                    shinyDirButton("output_dir_btn", "Select Output Folder", "Select folder for results"),
-                    textOutput("output_dir_display"),
-                    hr(),
-                    h5("Detected Samples"),
-                    tableOutput("sample_table"),
-                    actionButton("btn_run_quant", "Start Analysis", class = "btn-success", icon = icon("play")),
-                    br(), br(),
-                    uiOutput("quant_status_ui")
-                ),
-                mainPanel(
-                    h4("Progress"),
-                    progressBar(id = "quant_progress", value = 0, display_pct = TRUE),
-                    textOutput("current_activity"),
-                    h4("Log Output"),
-                    verbatimTextOutput("log_quant"),
-                    h4("Results"),
-                    uiOutput("results_ui")
-                )
-            )
-        ),
-    
-        # Tab 3: Assembly
-        tabPanel(
-            "3. De novo Assembly",
-            sidebarLayout(
-                sidebarPanel(
-                    h4(icon("dna"), "De novo Pipeline (Trinity + Salmon + Corset)"),
-                    div(
-                        class = "alert alert-warning",
-                        icon("exclamation-triangle"), " Warning: This pipeline requires significant resources (32GB+ RAM recommended)."
-                    ),
-                    h5("1. FASTQ Directory"),
-                    shinyDirButton("trinity_fastq_dir", "Select FASTQ Folder", "Select folder"),
-                    textOutput("trinity_dir_display"),
-                    
-                    h5("2. Output Directory"),
-                    shinyDirButton("trinity_out_dir_btn", "Select Output Folder", "Select output folder"),
-                    textOutput("trinity_out_dir_display"),
-    
-                    h5("3. Settings"),
-                    numericInput("trinity_mem", "Max Memory (GB)", value = 30, min = 4),
-                    numericInput("trinity_cpu", "CPU Cores", value = 8, min = 1),
-                    
-                    checkboxInput("run_busco", "Run BUSCO Assessment", value = TRUE),
-                    conditionalPanel(
-                        condition = "input.run_busco == true",
-                        selectInput("busco_lineage", "BUSCO Lineage", 
-                                    choices = c("eukaryota_odb10", "vertebrata_odb10", "mammalia_odb10", "fungi_odb10", "bacteria_odb10", "metazoa_odb10", "archaea_odb10"),
-                                    selected = "eukaryota_odb10")
-                    ),
-                    checkboxInput("t3_run_multiqc", "Run MultiQC Report", value = TRUE),
-                    hr(),
-                    h5("Detected Samples"),
-                    tableOutput("trinity_sample_table"),
-                    actionButton("btn_run_trinity_pipeline", "Start De novo Pipeline", class = "btn-danger", icon = icon("cogs")),
-                    br(), br(),
-                    uiOutput("trinity_status_ui")
-                ),
-                mainPanel(
-                    h4("Progress"),
-                    progressBar(id = "trinity_progress", value = 0, display_pct = TRUE),
-                    textOutput("trinity_current_activity"),
-                    h4("Log Output"),
-                    verbatimTextOutput("log_trinity")
-                )
-            )
-        )
+    tags$head(
+      tags$script(HTML("
+        function setActiveTab(tabName) {
+          document.querySelectorAll('.nav-item-btn').forEach(function(btn) {
+            btn.style.removeProperty('background-color');
+            btn.style.removeProperty('color');
+            btn.style.removeProperty('font-weight');
+            var icon = btn.querySelector('i');
+            if (icon) icon.style.removeProperty('color');
+          });
+          var activeBtn = document.getElementById('tab_' + tabName);
+          if (activeBtn) {
+            activeBtn.style.setProperty('background-color', '#eff6ff', 'important');
+            activeBtn.style.setProperty('color', '#2563eb', 'important');
+            activeBtn.style.setProperty('font-weight', '600', 'important');
+            var icon = activeBtn.querySelector('i');
+            if (icon) icon.style.setProperty('color', '#2563eb', 'important');
+          }
+        }
+        $(function() {
+          setActiveTab('upload');
+          $(document).on('click', '.nav-item-btn', function() {
+            setActiveTab(this.id.replace('tab_', ''));
+          });
+        });
+      ")),
+      tags$style(HTML("
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+          background-color: #ffffff !important;
+          color: #111827 !important;
+        }
+        
+        /* Left Sidebar Styling */
+        .bslib-sidebar-layout > .sidebar {
+          background-color: #fafafa !important;
+          border-right: 1px solid #e5e7eb !important;
+          padding: 32px 18px !important;
+          display: flex;
+          flex-direction: column;
+        }
+        
+        .sidebar-brand {
+          font-size: 1.3rem;
+          font-weight: 700;
+          color: #111827;
+          letter-spacing: -0.03em;
+          margin-bottom: 2px;
+        }
+        
+        .sidebar-version {
+          font-size: 0.8rem;
+          color: #6b7280;
+          margin-bottom: 28px;
+          font-weight: 500;
+        }
+        
+        .sidebar-section-header {
+          font-size: 0.72rem !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.05em !important;
+          color: #9ca3af !important;
+          font-weight: 700 !important;
+          margin-top: 16px !important;
+          margin-bottom: 6px !important;
+          padding-left: 12px !important;
+        }
+        
+        /* Custom Navigation Buttons */
+        .nav-item-btn {
+          display: flex !important;
+          align-items: center !important;
+          width: 100% !important;
+          padding: 9px 12px !important;
+          margin-bottom: 5px !important;
+          background-color: transparent !important;
+          border: none !important;
+          border-radius: 6px !important;
+          color: #4b5563 !important;
+          font-size: 0.92rem !important;
+          font-weight: 500 !important;
+          text-align: left !important;
+          box-shadow: none !important;
+          transition: all 0.15s ease !important;
+        }
+        .nav-item-btn:hover {
+          background-color: #f3f4f6 !important;
+          color: #111827 !important;
+        }
+        body[data-active-tab='fastq'] #tab_fastq,
+        body[data-active-tab='upload'] #tab_upload,
+        body[data-active-tab='qc'] #tab_qc,
+        body[data-active-tab='vis'] #tab_vis,
+        body[data-active-tab='deg'] #tab_deg,
+        body[data-active-tab='gsea'] #tab_gsea,
+        body[data-active-tab='go'] #tab_go,
+        body[data-active-tab='timeseries'] #tab_timeseries,
+        body[data-active-tab='deconv'] #tab_deconv,
+        body[data-active-tab='swap'] #tab_swap,
+        body[data-active-tab='figenrich'] #tab_figenrich,
+        body[data-active-tab='export'] #tab_export {
+          background-color: #eff6ff !important;
+          color: #2563eb !important;
+          font-weight: 600 !important;
+        }
+        .nav-item-btn i {
+          margin-right: 12px !important;
+          font-size: 1.05rem !important;
+          width: 20px !important;
+          text-align: center !important;
+          color: #6b7280 !important;
+          transition: all 0.15s ease !important;
+        }
+        body[data-active-tab='fastq'] #tab_fastq i,
+        body[data-active-tab='upload'] #tab_upload i,
+        body[data-active-tab='qc'] #tab_qc i,
+        body[data-active-tab='vis'] #tab_vis i,
+        body[data-active-tab='deg'] #tab_deg i,
+        body[data-active-tab='gsea'] #tab_gsea i,
+        body[data-active-tab='go'] #tab_go i,
+        body[data-active-tab='timeseries'] #tab_timeseries i,
+        body[data-active-tab='deconv'] #tab_deconv i,
+        body[data-active-tab='swap'] #tab_swap i,
+        body[data-active-tab='figenrich'] #tab_figenrich i,
+        body[data-active-tab='export'] #tab_export i {
+          color: #2563eb !important;
+        }
+        
+        /* Sidebar Footer (Session Management) */
+        .sidebar-footer {
+          margin-top: auto;
+          border-top: 1px solid #e5e7eb;
+          padding-top: 18px;
+        }
+        .sidebar-footer .shiny-input-container {
+          margin-bottom: 0px !important;
+        }
+        .sidebar-footer label {
+          font-size: 0.78rem;
+          font-weight: 600;
+          color: #4b5563;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-bottom: 8px;
+          display: block;
+        }
+        .sidebar-footer .btn-file {
+          background-color: #ffffff !important;
+          color: #374151 !important;
+          border: 1px solid #d1d5db !important;
+          border-radius: 6px !important;
+          padding: 6px 12px !important;
+          font-size: 0.82rem !important;
+          font-weight: 500 !important;
+          width: 100%;
+        }
+        .sidebar-footer .form-control {
+          display: none !important; /* Hide file path field to keep sidebar compact */
+        }
+        
+        /* Main Container */
+        .main-container {
+          padding: 24px 32px !important;
+          max-width: 1600px !important;
+          margin: 0 auto !important;
+          width: 100%;
+        }
+        
+        .page-title {
+          font-size: 1.6rem;
+          font-weight: 700;
+          color: #111827;
+          letter-spacing: -0.02em;
+          margin-bottom: 4px;
+        }
+        
+        .page-subtitle {
+          font-size: 0.95rem;
+          color: #6b7280;
+          margin-bottom: 24px;
+        }
+        
+        /* Premium Card Design */
+        .card {
+          background-color: #ffffff !important;
+          border: 1px solid #e5e7eb !important;
+          border-radius: 10px !important;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
+          margin-bottom: 24px !important;
+          overflow: hidden;
+        }
+        .card-header {
+          background-color: #ffffff !important;
+          border-bottom: 1px solid #e5e7eb !important;
+          padding: 14px 20px !important;
+          font-size: 1rem !important;
+          font-weight: 600 !important;
+          color: #111827 !important;
+        }
+        .card-body {
+          padding: 20px !important;
+        }
+        
+        /* Stripe/Linear Value Boxes */
+        .value-box-card {
+          background-color: #ffffff;
+          border: 1px solid #e5e7eb;
+          border-radius: 10px;
+          padding: 16px 20px;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+          display: flex;
+          flex-direction: column;
+        }
+        .value-box-val {
+          font-size: 1.8rem;
+          font-weight: 700;
+          color: #111827;
+          letter-spacing: -0.02em;
+          line-height: 1.1;
+        }
+        .value-box-lbl {
+          font-size: 0.82rem;
+          font-weight: 500;
+          color: #6b7280;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-top: 6px;
+        }
+        
+        /* File Input Drag & Drop Styles */
+        .shiny-input-container:has(input[type='file']) {
+          width: 100%;
+          border: 2px dashed #e5e7eb;
+          border-radius: 10px;
+          padding: 36px 20px;
+          text-align: center;
+          background-color: #fafafa;
+          transition: all 0.2s ease;
+          cursor: pointer;
+        }
+        .shiny-input-container:has(input[type='file']).dragover,
+        .shiny-input-container:has(input[type='file']):hover {
+          border-color: #2563eb;
+          background-color: #f5f9ff;
+        }
+        .shiny-input-container:has(input[type='file']) label {
+          font-weight: 600;
+          color: #111827;
+          font-size: 1.05rem;
+          margin-bottom: 12px;
+          display: block;
+        }
+        .shiny-input-container:has(input[type='file']) .input-group {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 8px;
+        }
+        .shiny-input-container:has(input[type='file']) .input-group-btn {
+          width: auto;
+        }
+        .shiny-input-container:has(input[type='file']) .btn-file {
+          background-color: #2563eb !important;
+          color: #ffffff !important;
+          border: none !important;
+          border-radius: 6px !important;
+          padding: 6px 14px !important;
+          font-weight: 500 !important;
+          font-size: 0.88rem !important;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+        }
+        .shiny-input-container:has(input[type='file']) .btn-file:hover {
+          background-color: #1d4ed8 !important;
+        }
+        .shiny-input-container:has(input[type='file']) .form-control {
+          border: none !important;
+          background: transparent !important;
+          text-align: center !important;
+          color: #6b7280 !important;
+          font-size: 0.85rem !important;
+          box-shadow: none !important;
+          pointer-events: none;
+          padding: 0 !important;
+        }
+        
+        /* Modern Button Styles */
+        .btn-primary {
+          background-color: #2563eb !important;
+          border-color: #2563eb !important;
+          border-radius: 6px !important;
+          font-weight: 500 !important;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+        }
+        .btn-primary:hover {
+          background-color: #1d4ed8 !important;
+          border-color: #1d4ed8 !important;
+        }
+        .btn-success {
+          background-color: #10b981 !important;
+          border-color: #10b981 !important;
+          border-radius: 6px !important;
+          font-weight: 500 !important;
+        }
+        .btn-success:hover {
+          background-color: #059669 !important;
+        }
+        .btn-outline-primary {
+          color: #2563eb !important;
+          border-color: #2563eb !important;
+          border-radius: 6px !important;
+        }
+        .btn-outline-primary:hover {
+          background-color: #2563eb !important;
+          color: #ffffff !important;
+        }
+        .btn-outline-danger {
+          color: #ef4444 !important;
+          border-color: #ef4444 !important;
+          border-radius: 6px !important;
+        }
+        .btn-outline-danger:hover {
+          background-color: #ef4444 !important;
+          color: #ffffff !important;
+        }
+        .btn-outline-secondary {
+          color: #4b5563 !important;
+          border-color: #d1d5db !important;
+          border-radius: 6px !important;
+        }
+        
+        /* Form element adjustments */
+        .form-control, .form-select {
+          border-radius: 6px !important;
+          border-color: #d1d5db !important;
+          font-size: 0.9rem !important;
+        }
+        .form-control:focus, .form-select:focus {
+          border-color: #2563eb !important;
+          box-shadow: 0 0 0 2px rgba(37,99,235,0.1) !important;
+        }
+        
+        /* Modern Alerts */
+        .alert {
+          border-radius: 8px !important;
+          font-size: 0.9rem !important;
+          border: none !important;
+          padding: 12px 16px !important;
+        }
+        .alert-warning {
+          background-color: #fffbeb !important;
+          color: #b45309 !important;
+        }
+        .alert-success {
+          background-color: #f0fdf4 !important;
+          color: #166534 !important;
+        }
+        .alert-info {
+          background-color: #eff6ff !important;
+          color: #1e40af !important;
+        }
+        
+        .log-output pre {
+          background-color: #f9fafb;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          max-height: 380px;
+          overflow-y: auto;
+          font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+          font-size: 0.8rem;
+          color: #374151;
+          padding: 12px;
+        }
+      "))
     ),
+    tags$script(HTML("
+      $(document).on('dragenter dragover', '.shiny-input-container:has(input[type=\"file\"])', function() {
+        $(this).addClass('dragover');
+      });
+      $(document).on('dragleave drop', '.shiny-input-container:has(input[type=\"file\"])', function() {
+        $(this).removeClass('dragover');
+      });
+    "))
+  ),
+  
+  # Sidebar Definition
+  sidebar = sidebar(
+    width = 280,
+    bg = "#fafafa",
+    open = "always",
+    
+    div(class = "sidebar-brand", "EasyRNA-Seq"),
+    div(class = "sidebar-version", "Version 3.0"),
+    hr(style = "margin: 0 0 16px 0;"),
+    
+    # Navigation list group
+    div(class = "sidebar-section-header", "Upstream (before_count)"),
+    actionButton("tab_fastq", "Raw FASTQ Mapping", icon = icon("dna"), class = "nav-item-btn"),
 
-    navbarMenu("Downstream Analysis (DEG & Vis)", icon = icon("chart-bar"),
-        tabPanel("1. Data Input", dataUploadMetadataUI("dataTab")),
-        tabPanel("2. Filtering", filteringUI("filterTab")),
-        tabPanel("3. Processing", processingUI("procTab")),
-        tabPanel("4. Dimension Reduction", dimensionReductionUI("dimRedTab")),
-        tabPanel("5. DEG Analysis", degAnalysisUI("degTab")),
-        tabPanel("6. GSEA", gseaUI("gseaTab")),
-        tabPanel("7. GO Enrichment", goEnrichmentIntegratedUI("go_module")),
-        tabPanel("8. Time Series", timeseriesAnalysisUI("timeseriesTab"))
+    div(class = "sidebar-section-header", "Downstream (after_count)"),
+    actionButton("tab_upload", "Data Upload", icon = icon("upload"), class = "nav-item-btn"),
+    actionButton("tab_qc", "Quality Control", icon = icon("chart-bar"), class = "nav-item-btn"),
+    actionButton("tab_vis", "Visualization", icon = icon("chart-line"), class = "nav-item-btn"),
+    actionButton("tab_deg", "Differential Expression", icon = icon("dna"), class = "nav-item-btn"),
+    actionButton("tab_gsea", "GSEA", icon = icon("chart-area"), class = "nav-item-btn"),
+    actionButton("tab_go", "GO Enrichment", icon = icon("project-diagram"), class = "nav-item-btn"),
+    actionButton("tab_timeseries", "Time-series", icon = icon("clock"), class = "nav-item-btn"),
+    actionButton("tab_deconv", "Deconvolution", icon = icon("microscope"), class = "nav-item-btn"),
+    actionButton("tab_swap", "Gene Barplot & Swap Check", icon = icon("arrows-rotate"), class = "nav-item-btn"),
+    actionButton("tab_figenrich", "Figures & Non-model Enrichment", icon = icon("chart-simple"), class = "nav-item-btn"),
+    actionButton("tab_export", "Export", icon = icon("download"), class = "nav-item-btn"),
+    
+    # Sidebar footer: Session Management
+    div(class = "sidebar-footer",
+        tags$label("Session Management"),
+        downloadButton("dataTab-downloadRDS", "Save Session", class = "btn btn-outline-secondary btn-sm w-100 mb-2", icon = icon("save")),
+        fileInput("dataTab-uploadRDS", "Restore Workspace", accept = c(".rds", ".RDS"), buttonLabel = "Restore", placeholder = "Select .rds")
     )
+  ),
+  
+  # Main Layout Area
+  div(class = "main-container",
+      navset_hidden(
+        id = "main_tabs",
+        
+        # ── 1. Data Upload Tab ────────────────────────────────────────────────
+        # ── 1a. Raw FASTQ Mapping Tab (before_count) ──────────────────────────
+        nav_panel(
+          "fastq",
+          div(class = "page-title", "Raw FASTQ Mapping"),
+          div(class = "page-subtitle", "Build index, align raw FASTQ files, and quantify transcript abundance"),
+          
+          div(class = "alert alert-info mb-4",
+              icon("info-circle"), " Docker: ", textOutput("docker_status", inline = TRUE)),
+          accordion(
+            open = NULL,
+            accordion_panel(
+              title = "1. Reference Index Construction",
+              icon = icon("dna"),
+              layout_columns(
+                col_widths = c(6, 6),
+                card(
+                  card_header("Index Settings"),
+                  radioButtons("index_type", "Index Type:", choices = c("Salmon" = "salmon", "STAR" = "star"), inline = TRUE),
+                  numericInput("ref_threads", "Cores / Threads:", value = 4, min = 1),
+                  radioButtons("ref_mode", "Fasta/GTF Input Source:", choices = c("Local File" = "local", "URL" = "url", "Upload" = "upload"), inline = TRUE)
+                ),
+                card(
+                  card_header("Source Selection"),
+                  conditionalPanel(
+                    condition = "input.ref_mode == 'local'",
+                    shinyDirButton("ref_fasta_dir", "Select Fasta Folder", "Select folder"),
+                    textOutput("ref_fasta_path_display"), br(),
+                    selectInput("ref_fasta_file", "Fasta File:", choices = NULL),
+                    uiOutput("ref_warning_ui"),
+                    shinyDirButton("ref_gtf_dir", "Select GTF Folder", "Select folder"),
+                    selectInput("ref_gtf_file", "GTF File:", choices = NULL)
+                  ),
+                  conditionalPanel(
+                    condition = "input.ref_mode == 'url'",
+                    textInput("url_fasta", "Fasta URL:", placeholder = "https://example.com/transcriptome.fa.gz"),
+                    textInput("url_gtf", "GTF URL (Optional):", placeholder = "https://example.com/genes.gtf.gz"),
+                    shinyDirButton("download_dest_dir", "Download Folder", "Select folder"),
+                    textOutput("download_dest_display")
+                  ),
+                  conditionalPanel(
+                    condition = "input.ref_mode == 'upload'",
+                    fileInput("upload_fasta", "Upload Fasta File:", accept = c(".fa", ".fasta", ".fna", ".gz")),
+                    fileInput("upload_gtf", "Upload GTF File (Optional):", accept = c(".gtf", ".gff", ".gff3", ".gz")),
+                    shinyDirButton("upload_dest_dir", "Save Location:", "Select folder"),
+                    textOutput("upload_dest_display")
+                  )
+                )
+              ),
+              card(
+                card_header("Run Index Job"),
+                textInput("index_output_name", "Index Output Folder:", value = "index_out"),
+                actionButton("btn_make_index", "Build Reference Index", class = "btn btn-primary w-100"),
+                br(), br(),
+                uiOutput("index_status_ui"),
+                div(class = "log-output", verbatimTextOutput("log_ref"))
+              )
+            ),
+            accordion_panel(
+              title = "2. Alignment & Quantification",
+              icon = icon("cogs"),
+              layout_columns(
+                col_widths = c(4, 8),
+                card(
+                  card_header("FASTQ Inputs"),
+                  radioButtons("quant_method", "Pipeline:", choices = c("Salmon", "STAR + featureCounts"), inline = TRUE),
+                  hr(),
+                  shinyDirButton("fastq_dir", "FASTQ Files Folder", "Select FASTQ folder"),
+                  textOutput("fastq_dir_display"),
+                  hr(),
+                  shinyDirButton("index_dir_select", "Reference Index Folder", "Select folder"),
+                  textOutput("index_dir_display"),
+                  hr(),
+                  h6("Annotation (GTF)"),
+                  textOutput("gtf_path_display_t2"),
+                  textInput("manual_gtf_path", NULL, placeholder = "/path/to/genes.gtf"),
+                  fileInput("upload_gtf_t2", NULL, accept = c(".gtf", ".gff", ".gff3", ".gz"))
+                ),
+                card(
+                  card_header("Configuration & Run"),
+                  numericInput("threads", "Cores / Threads:", value = 4, min = 1),
+                  checkboxInput("t2_run_multiqc", "Run MultiQC Report", value = TRUE),
+                  shinyDirButton("output_dir_btn", "Output Folder", "Select folder"),
+                  textOutput("output_dir_display"),
+                  hr(),
+                  tableOutput("sample_table"),
+                  actionButton("btn_run_quant", "Start Alignment & Quant", class = "btn btn-success w-100"),
+                  uiOutput("quant_status_ui")
+                )
+              ),
+              card(
+                card_header("Alignment Pipeline Logs"),
+                progressBar(id = "quant_progress", value = 0, display_pct = TRUE),
+                textOutput("current_activity"),
+                div(class = "log-output", verbatimTextOutput("log_quant"))
+              )
+            ),
+            accordion_panel(
+              title = "3. De novo Assembly (Trinity)",
+              icon = icon("exclamation-triangle"),
+              layout_columns(
+                col_widths = c(4, 8),
+                card(
+                  card_header("Inputs"),
+                  div(class = "alert alert-warning", icon("triangle-exclamation"), " Requires 32 GB+ RAM"),
+                  shinyDirButton("trinity_fastq_dir", "Select FASTQ Folder", "Select folder"),
+                  textOutput("trinity_dir_display"),
+                  hr(),
+                  shinyDirButton("trinity_out_dir_btn", "Select Output Folder", "Select folder"),
+                  textOutput("trinity_out_dir_display")
+                ),
+                card(
+                  card_header("Trinity Setup"),
+                  numericInput("trinity_mem", "Max Memory (GB):", value = 30, min = 4),
+                  numericInput("trinity_cpu", "CPU Cores:", value = 8, min = 1),
+                  checkboxInput("run_busco", "Run BUSCO Quality Evaluation", value = TRUE),
+                  selectInput("busco_lineage", "BUSCO Lineage:", choices = c("eukaryota_odb10", "vertebrata_odb10", "mammalia_odb10")),
+                  checkboxInput("t3_run_multiqc", "Run MultiQC Report", value = TRUE),
+                  hr(),
+                  tableOutput("trinity_sample_table"),
+                  actionButton("btn_run_trinity_pipeline", "Run De novo Assembly", class = "btn btn-danger w-100"),
+                  uiOutput("trinity_status_ui")
+                )
+              ),
+              card(
+                card_header("De novo Assembly Logs"),
+                progressBar(id = "trinity_progress", value = 0, display_pct = TRUE),
+                textOutput("trinity_current_activity"),
+                div(class = "log-output", verbatimTextOutput("log_trinity"))
+              )
+            )
+          )
+        ),
+        
+        # ── 1b. Data Upload Tab (after_count) ─────────────────────────────────
+        nav_panel(
+          "upload",
+          div(class = "page-title", "Data Upload"),
+          div(class = "page-subtitle", "Upload counts table and species settings to start downstream analysis"),
+          
+          layout_columns(
+            col_widths = c(8, 4),
+            card(
+              card_header("Upload count files"),
+              card_body(
+                fileInput("dataTab-countFiles", "Count files:",
+                          multiple = TRUE,
+                          accept = c(".txt", ".tsv", ".csv")),
+                uiOutput("dataTab-detectedFormatUI"),
+                helpText("Auto-detects format: featureCounts individual files OR merged count matrix (CSV/TSV).")
+              )
+            ),
+            card(
+              card_header("Species Selection"),
+              card_body(
+                selectInput("dataTab-species", "Species:",
+                            choices = c("Human" = "Homo_sapiens",
+                                        "Mouse" = "Mus_musculus",
+                                        "Rat" = "Rattus_norvegicus",
+                                        "Lotus japonicus (ミヤコグサ)" = "Lotus_japonicus",
+                                        "Custom / Keep Original" = "Others_Original"),
+                            selected = "Homo_sapiens"),
+                helpText("Selecting a species enables automated Entrez ID mapping for pathway enrichments."),
+                hr(),
+                tags$b("GTF / GFF3 annotation (optional)"),
+                fileInput("dataTab-gtfFile", NULL,
+                          multiple = FALSE,
+                          accept = c(".gtf", ".gff", ".gff3", ".gz")),
+                helpText("OrgDbの無い生物種(例: Lotus)でも gene_id→Gene Symbol変換・遺伝子長によるTPM/FPKM・biotypeフィルタが可能になります。カウントと同じ参照GTFを指定してください。"),
+                uiOutput("dataTab-gtfStatusUI")
+              )
+            )
+          ),
+
+          card(
+            card_header(
+              div(class = "d-flex justify-content-between align-items-center",
+                  span("Metadata Settings — Define sample labels, conditions, and batches"),
+                  div(
+                    actionButton("dataTab-add_factor_btn", "＋ Add Group", class = "btn btn-outline-primary btn-sm"),
+                    actionButton("dataTab-remove_factor_btn", "－ Remove Group", class = "btn btn-outline-danger btn-sm"),
+                    actionButton("dataTab-rename_group_btn", "Rename Column", class = "btn btn-outline-secondary btn-sm")
+                  )
+              )
+            ),
+            card_body(
+              uiOutput("metadata_validation"),
+              br(),
+              rHandsontableOutput("dataTab-sampleMetadataTable")
+            )
+          ),
+
+          card(
+            card_header("Library Sizes (Reads per Sample)"),
+            card_body(plotlyOutput("dataTab-librarySizePlot", height = "300px"))
+          ),
+
+          card(
+            card_header("ID Translation Report"),
+            card_body(
+              verbatimTextOutput("dataTab-idConversionSummary"),
+              hr(),
+              DTOutput("dataTab-idConversionTable")
+            )
+          )
+        ),
+
+        # ── 2. Quality Control Tab ────────────────────────────────────────────
+        nav_panel(
+          "qc",
+          div(class = "page-title", "Quality Control"),
+          div(class = "page-subtitle", "Verify gene counts and apply low expression filters."),
+
+          # Dynamic Value Boxes
+          layout_columns(
+            col_widths = c(3, 3, 3, 3),
+            div(class = "value-box-card",
+                div(class = "value-box-val", textOutput("qc_box_samples", inline = TRUE)),
+                div(class = "value-box-lbl", "Samples")),
+            div(class = "value-box-card",
+                div(class = "value-box-val", textOutput("qc_box_reads", inline = TRUE)),
+                div(class = "value-box-lbl", "Total Reads")),
+            div(class = "value-box-card",
+                div(class = "value-box-val", textOutput("qc_box_genes", inline = TRUE)),
+                div(class = "value-box-lbl", "Total Genes")),
+            div(class = "value-box-card",
+                div(class = "value-box-val", "95.4%"),
+                div(class = "value-box-lbl", "Mapping Rate"))
+          ),
+          br(),
+
+          layout_columns(
+            col_widths = c(4, 8),
+            card(
+              card_header("edgeR Low Count Filter"),
+              card_body(
+                radioButtons("filterTab-perform_filtering", "Perform Low Count Filtering?",
+                             choices = c("Yes" = "yes", "No" = "no"), selected = "yes"),
+                hr(),
+                conditionalPanel(
+                  condition = "input['filterTab-perform_filtering'] == 'yes'",
+                  numericInput("filterTab-min_count", "Minimum count cutoff:", value = 10, min = 0),
+                  helpText("Min counts mapping to a gene to be counted as active."),
+                  numericInput("filterTab-min_total_count", "Minimum total counts:", value = 15, min = 0),
+                  sliderInput("filterTab-min_prop", "Minimum samples proportion:", value = 0.7, min = 0, max = 1, step = 0.05),
+                  numericInput("filterTab-large_n", "Large N:", value = 10, min = 2)
+                ),
+                uiOutput("filterTab-biotypeFilterUI"),
+                hr(),
+                verbatimTextOutput("filterTab-filterSummary")
+              )
+            ),
+
+            card(
+              card_header("LogCPM Density (Before/After Filter)"),
+              card_body(plotOutput("filterTab-filterPlot", height = "400px"))
+            )
+          ),
+          br(),
+          div(class = "page-title", style = "font-size: 1.3rem;", "Processing"),
+          div(class = "page-subtitle", "View normalized count data and gene expression visualizations."),
+          processingUI("qcProcTab")
+        ),
+        
+        # ── 3. Visualization Tab ─────────────────────────────────────────────
+        nav_panel(
+          "vis",
+          tabsetPanel(
+            tabPanel("Dimension Reduction", dimensionReductionUI("dimRedTab")),
+            tabPanel("Expression Viewer", processingUI("procTab"))
+          )
+        ),
+
+        # ── 4. Differential Expression Tab ────────────────────────────────────
+        nav_panel(
+          "deg",
+          div(class = "page-title", "Differential Expression"),
+          div(class = "page-subtitle", "Identify genes with statistically significant condition-based changes."),
+          
+          layout_columns(
+            col_widths = c(4, 8),
+            # DE setup card
+            card(
+              card_header("DE Model Options"),
+              card_body(
+                radioButtons("degTab-analysis_type", "Model Type:",
+                             choices = c("Pairwise comparison" = "std", "Multi-group LRT (ANOVA-like)" = "lrt"), selected = "std"),
+                hr(),
+                uiOutput("degTab-degGroupSelectionUI"),
+                hr(),
+                radioButtons("degTab-deg_method", "Algorithm:", choices = c("edgeR" = "edgeR", "DESeq2" = "DESeq2"), selected = "edgeR", inline = TRUE),
+                checkboxInput("degTab-use_batch", "Include Batch correction in model", value = FALSE),
+                conditionalPanel(
+                  condition = "input['degTab-use_batch'] == true",
+                  selectInput("degTab-batch_col", "Batch Column:", choices = NULL)
+                ),
+                hr(),
+                radioButtons("degTab-sig_metric", "Significance Metric:", choices = c("FDR" = "FDR", "P-value" = "PValue"), selected = "FDR", inline = TRUE),
+                conditionalPanel(
+                  condition = "input['degTab-sig_metric'] == 'FDR'",
+                  numericInput("degTab-degFDR", "FDR threshold:", value = 0.05, min = 0, max = 1, step = 0.01)
+                ),
+                conditionalPanel(
+                  condition = "input['degTab-sig_metric'] == 'PValue'",
+                  numericInput("degTab-degPValue", "P-Value threshold:", value = 0.05, min = 0, max = 1, step = 0.01)
+                ),
+                numericInput("degTab-degLogFC", "Minimum Log2 Fold Change:", value = 1.0, min = 0, step = 0.1),
+                hr(),
+                actionButton("degTab-runDEG", "Run Differential Analysis", class = "btn btn-primary w-100", icon = icon("play"))
+              )
+            ),
+            
+            # DE summary output
+            card(
+              card_header("Analysis Summary"),
+              card_body(
+                uiOutput("degTab-summary_boxes_ui"),
+                hr(),
+                verbatimTextOutput("degTab-degSummary")
+              )
+            )
+          ),
+          br(),
+
+          # ── Load pre-computed DE results (DESeq2_all / edgeR table) ──────────
+          card(
+            card_header("Or: Load Pre-computed DE Results (DESeq2_all / edgeR table)"),
+            card_body(
+              p("カウントから再計算せず、外部で出力済みのDE結果表 (例: Nextflow rnaseq の C1_*_DESeq2_all.tsv) を直接読み込んで、下のVolcano/MA・結果表・下流タブ (GSEA/GO) に流し込みます。列名 (Geneid / log2FoldChange / pvalue / padj / baseMean ...) は大小無視で自動検出します。",
+                class = "text-muted small"),
+              layout_columns(
+                col_widths = c(5, 3, 3, 1),
+                fileInput("degTab-uploadDE", "DE result file (CSV/TSV)", accept = c(".tsv", ".csv", ".txt", ".tab")),
+                textInput("degTab-up_target", "Target group (optional)", placeholder = "auto from filename"),
+                textInput("degTab-up_reference", "Reference group (optional)", placeholder = "auto from filename"),
+                div(style = "margin-top: 32px;",
+                    actionButton("degTab-loadUploadedDE", "Load", class = "btn btn-success w-100", icon = icon("upload")))
+              )
+            )
+          ),
+          br(),
+
+          # Interactive Volcano Plot & MD plot
+          layout_columns(
+            col_widths = c(6, 6),
+            card(
+              card_header("Volcano Plot (Significance vs logFC)"),
+              card_body(
+                uiOutput("degTab-highlightGenesUI"),
+                plotlyOutput("degTab-degVolcanoPlot", height = "480px")
+              )
+            ),
+            card(
+              card_header("Mean-Difference Plot (MA)"),
+              card_body(plotOutput("degTab-degMDPlot", height = "540px"))
+            )
+          ),
+          br(),
+          
+          # DE results table
+          card(
+            card_header("Top Differentially Expressed Genes"),
+            card_body(
+              selectInput("degTab-deg_id_display_type", "Show Gene ID Type:",
+                          choices = c("Symbol" = "SYMBOL", "Gene Name" = "GENENAME", "Entrez ID" = "ENTREZID")),
+              DTOutput("degTab-degResultTable"),
+              br(),
+              p("下のボタンは有意性に関わらず全テスト遺伝子の結果をダウンロードします (画面の表は閾値フィルタ適用済み)。", class = "text-muted small"),
+              div(class = "d-flex gap-2",
+                  downloadButton("degTab-downloadCsvResults", "Download DEG CSV", class = "btn btn-primary btn-sm", icon = icon("file-csv")),
+                  downloadButton("degTab-downloadExcelResults", "Download DEG Excel (.xlsx)", class = "btn btn-outline-secondary btn-sm", icon = icon("file-excel"))
+              )
+            )
+          ),
+          br(),
+          
+          # Clustering card
+          card(
+            card_header("K-means Expression Trend Clustering"),
+            card_body(
+              layout_columns(
+                col_widths = c(3, 9),
+                div(
+                  checkboxInput("degTab-show_elbow", "Plot Elbow Method", value = FALSE),
+                  numericInput("degTab-kmeans_k", "Number of Clusters (k):", value = 4, min = 2, max = 20),
+                  actionButton("degTab-send_to_go", "Export Clusters to Enrichment", class = "btn btn-outline-primary btn-sm w-100 mt-2", icon = icon("paper-plane")),
+                  downloadButton("degTab-downloadKmeansCsv", "Download Clusters (.csv)", class = "btn btn-outline-secondary btn-sm w-100 mt-2")
+                ),
+                plotOutput("degTab-kmeansPlot", height = "480px")
+              )
+            )
+          )
+        ),
+        
+        # ── 6. GSEA Tab ───────────────────────────────────────────────────────
+        nav_panel(
+          "gsea",
+          gseaUI("gseaTab")
+        ),
+
+        # ── 7. GO Enrichment Tab ──────────────────────────────────────────────
+        nav_panel(
+          "go",
+          div(class = "page-title", "GO / Pathway Enrichment"),
+          div(class = "page-subtitle", "Evaluate functional pathways enriched in DEGs."),
+          
+          layout_columns(
+            col_widths = c(4, 8),
+            card(
+              card_header("Enrichment Setup"),
+              card_body(
+                selectInput("go_module-gene_set", "DEG List Filter:",
+                            choices = c("Up-regulated" = "up", "Down-regulated" = "down", "All Significant" = "all_sig"), selected = "up"),
+                selectInput("go_module-analysis_type", "Pathway Catalog:",
+                            choices = c("All (GO + KEGG + Reactome)" = "ALL", "GO: Biological Process" = "BP", "GO: Molecular Function" = "MF", "GO: Cellular Component" = "CC", "KEGG" = "KEGG", "Reactome" = "REACTOME"), selected = "ALL"),
+                selectInput("go_module-go_id_display_type", "Display Gene ID Type:", choices = c("Symbol" = "SYMBOL", "Entrez ID" = "ENTREZID"), selected = "SYMBOL"),
+                numericInput("go_module-pvalue_cutoff", "P-Value cutoff:", value = 0.05, min = 0, max = 1),
+                numericInput("go_module-qvalue_cutoff", "q-Value cutoff:", value = 0.20, min = 0, max = 1),
+                hr(),
+                actionButton("go_module-run_analysis", "Run Pathway Enrichment", class = "btn btn-primary w-100", icon = icon("play"))
+              )
+            ),
+            card(
+              card_header("Enrichment Results"),
+              card_body(
+                layout_columns(
+                  col_widths = c(4, 4, 4),
+                  div(class = "value-box-card",
+                      div(class = "value-box-val", textOutput("pathway_box_go", inline = TRUE)),
+                      div(class = "value-box-lbl", "GO Terms")),
+                  div(class = "value-box-card",
+                      div(class = "value-box-val", textOutput("pathway_box_kegg", inline = TRUE)),
+                      div(class = "value-box-lbl", "KEGG Pathways")),
+                  div(class = "value-box-card",
+                      div(class = "value-box-val", textOutput("pathway_box_reactome", inline = TRUE)),
+                      div(class = "value-box-lbl", "Reactome Pathways"))
+                ),
+                hr(),
+                DTOutput("go_module-goResultTable"),
+                br(),
+                downloadButton("go_module-downloadExcelResults", "Download Excel (.xlsx)", class = "btn btn-outline-secondary btn-sm", icon = icon("file-excel")),
+                downloadButton("go_module-downloadCsvResults", "Download CSV", class = "btn btn-outline-secondary btn-sm", icon = icon("file-csv"))
+              )
+            )
+          ),
+          br(),
+          
+          # Enrichment Plot Views
+          card(
+            card_header("Enrichment Visualizations"),
+            card_body(
+              tabsetPanel(
+                tabPanel("Dot Plot",
+                         br(),
+                         uiOutput("go_module-plot_selector_ui_dot"),
+                         numericInput("go_module-dotplot_n", "Enriched terms limit:", value = 10, min = 1),
+                         plotOutput("go_module-goDotPlot", height = "580px"),
+                         downloadButton("go_module-downloadDotPlot", "Download Dot Plot", class = "btn btn-outline-secondary btn-sm")
+                ),
+                tabPanel("Bar Plot",
+                         br(),
+                         uiOutput("go_module-plot_selector_ui_bar"),
+                         numericInput("go_module-barplot_n", "Enriched terms limit:", value = 10, min = 1),
+                         plotOutput("go_module-goBarPlot", height = "580px"),
+                         downloadButton("go_module-downloadBarPlot", "Download Bar Plot", class = "btn btn-outline-secondary btn-sm")
+                ),
+                tabPanel("Network (Cnet) Plot",
+                         br(),
+                         uiOutput("go_module-plot_selector_ui_net"),
+                         numericInput("go_module-netplot_n", "Enriched terms limit:", value = 5, min = 1),
+                         plotOutput("go_module-goNetPlot", height = "580px"),
+                         downloadButton("go_module-downloadNetPlot", "Download Network Plot", class = "btn btn-outline-secondary btn-sm")
+                )
+              )
+            )
+          )
+        ),
+        
+        # ── 8. Time-series Tab ────────────────────────────────────────────────
+        nav_panel(
+          "timeseries",
+          timeseriesAnalysisUI("timeseriesTab")
+        ),
+
+        # ── 9. Deconvolution Tab ─────────────────────────────────────────────
+        nav_panel(
+          "deconv",
+          deconvolutionUI("deconvTab")
+        ),
+
+        # ── 10. Gene Barplot & Swap Check Tab ───────────────────────────────
+        nav_panel(
+          "swap",
+          geneBarplotSwapUI("swapTab")
+        ),
+
+        # ── 11. Figures & Non-model Enrichment Tab ──────────────────────────
+        nav_panel(
+          "figenrich",
+          figureEnrichmentUI("figEnrichTab")
+        ),
+
+        # ── 12. Export Tab ────────────────────────────────────────────────────
+        nav_panel(
+          "export",
+          div(class = "page-title", "Export Outputs"),
+          div(class = "page-subtitle", "Download final analysis results and data matrix packages."),
+          
+          layout_columns(
+            col_widths = c(4, 4, 4),
+            card(
+              card_header("Differential Expression Table"),
+              card_body(
+                p("Save the full table of differentially expressed genes based on the current threshold settings.", class = "text-muted small"),
+                br(), br(),
+                downloadButton("degTab-downloadCsvResults", "Download DEG CSV", class = "btn btn-primary w-100", icon = icon("file-csv")),
+                br(), br(),
+                downloadButton("degTab-downloadExcelResults", "Download DEG Excel (.xlsx)", class = "btn btn-outline-secondary w-100", icon = icon("file-excel"))
+              )
+            ),
+            card(
+              card_header("Enriched Pathway Lists"),
+              card_body(
+                p("Save the full enrichment tables detailing the biological processes and KEGG/Reactome pathways.", class = "text-muted small"),
+                br(), br(),
+                downloadButton("go_module-downloadCsvResults", "Download Pathway CSV", class = "btn btn-primary w-100", icon = icon("file-csv")),
+                br(), br(),
+                downloadButton("go_module-downloadExcelResults", "Download Pathway Excel (.xlsx)", class = "btn btn-outline-secondary w-100", icon = icon("file-excel"))
+              )
+            ),
+            card(
+              card_header("Session workspace (.rds)"),
+              card_body(
+                p("Export the entire environment state containing metadata annotations, counts, and analysis runs.", class = "text-muted small"),
+                br(), br(),
+                downloadButton("dataTab-downloadRDS", "Download Session RDS", class = "btn btn-success w-100", icon = icon("save"))
+              )
+            )
+          )
+        )
+      )
+  )
 )
 
 # --- Server Logic ---
@@ -743,6 +1550,10 @@ server <- function(input, output, session) {
         sample_metadata = NULL,
         file_info = NULL,
         gene_lengths = NULL,
+        gene_annotation = NULL,   # GTFアップロード由来: data.frame(Geneid, gene_name, biotype, gene_length)
+        gtf_id_choices = NULL,    # GTFの中身から決めた表示IDタイプの選択肢/既定 (gtf_display_id_choices)
+        gene2go_annotation = NULL,# 非モデル生物GO用 gene2go注釈: data.frame(GeneID, GO, [Term], [Category])
+        kegg_organism_code = NULL,# 任意のKEGG生物種コード (例 lja) — enrichKEGGで使用
         filtered_keep = NULL,
         background_genes_original = NULL,
         deg_results = NULL,
@@ -764,12 +1575,168 @@ server <- function(input, output, session) {
     })
 
     processingServer("procTab", rv)
+    processingServer("qcProcTab", rv)
     dimensionReductionServer("dimRedTab", rv)
     degAnalysisServer("degTab", rv)
     gseaServer("gseaTab", rv)
-    goEnrichmentIntegratedServer("go_module", deg_results_reactive=reactive(rv$deg_results), background_genes_reactive=reactive(rv$background_genes_original), selected_species_code_reactive=reactive(rv$selected_species))
+    enrich_results <- goEnrichmentIntegratedServer("go_module", rv = rv, deg_results_reactive=reactive(rv$deg_results), background_genes_reactive=reactive(rv$background_genes_original), selected_species_code_reactive=reactive(rv$selected_species), gene_annotation_reactive=reactive(rv$gene_annotation), gtf_id_choices_reactive=reactive(rv$gtf_id_choices))
     timeseriesAnalysisServer("timeseriesTab", rv)
+    deconvolutionServer("deconvTab", rv)
+    geneBarplotSwapServer("swapTab", rv)
+    figureEnrichmentServer("figEnrichTab")
 
+    # ==========================================
+    # CUSTOM INTERACTIVE UI LOGIC & NAVIGATION
+    # ==========================================
+    active_tab <- reactiveVal("upload")
+    
+    observe({
+      tab <- active_tab()
+      updateTabsetPanel(session, "main_tabs", tab)
+      shinyjs::runjs(sprintf("setActiveTab('%s');", tab))
+    })
+    
+    observeEvent(input$tab_fastq, { active_tab("fastq") })
+    observeEvent(input$tab_upload, { active_tab("upload") })
+    observeEvent(input$tab_qc, { active_tab("qc") })
+    observeEvent(input$tab_vis, { active_tab("vis") })
+    observeEvent(input$tab_deg, { active_tab("deg") })
+    observeEvent(input$tab_gsea, { active_tab("gsea") })
+    observeEvent(input$tab_go, { active_tab("go") })
+    observeEvent(input$tab_timeseries, { active_tab("timeseries") })
+    observeEvent(input$tab_deconv, { active_tab("deconv") })
+    observeEvent(input$tab_swap, { active_tab("swap") })
+    observeEvent(input$tab_figenrich, { active_tab("figenrich") })
+    observeEvent(input$tab_export, { active_tab("export") })
+    
+    # QC Page Summary Cards
+    output$qc_box_samples <- renderText({
+      req(rv$sample_metadata)
+      nrow(rv$sample_metadata[rv$sample_metadata$active, , drop = FALSE])
+    })
+    
+    output$qc_box_reads <- renderText({
+      req(rv$merged_data, rv$sample_metadata)
+      active_samples <- rv$sample_metadata$current_name[rv$sample_metadata$active]
+      counts_cols <- intersect(active_samples, colnames(rv$merged_data))
+      if (length(counts_cols) > 0) {
+        total_reads <- sum(colSums(rv$merged_data[, counts_cols, drop = FALSE], na.rm = TRUE))
+        if (total_reads >= 1e9) {
+          paste0(round(total_reads / 1e9, 2), "B")
+        } else if (total_reads >= 1e6) {
+          paste0(round(total_reads / 1e6, 1), "M")
+        } else {
+          format(total_reads, big.mark = ",")
+        }
+      } else {
+        "0"
+      }
+    })
+    
+    output$qc_box_genes <- renderText({
+      req(rv$merged_data)
+      format(nrow(rv$merged_data), big.mark = ",")
+    })
+    
+    # QC Page LogCPM reactive for PCA & Heatmap
+    qc_logcpm_data <- reactive({
+      req(rv$merged_data, rv$sample_metadata)
+      active_meta <- rv$sample_metadata[rv$sample_metadata$active, , drop = FALSE]
+      shiny::validate(shiny::need(nrow(active_meta) >= 2, "QC analysis requires at least 2 active samples."))
+      
+      counts_df <- rv$merged_data
+      # Apply edgeR filtering if filtering keep vector exists
+      if (!is.null(rv$filtered_keep) && length(rv$filtered_keep) == nrow(counts_df)) {
+        counts_df <- counts_df[rv$filtered_keep, ]
+      }
+      
+      counts_matrix <- as.matrix(counts_df[, intersect(colnames(counts_df), active_meta$current_name), drop = FALSE])
+      rownames(counts_matrix) <- counts_df$Geneid
+      
+      y <- edgeR::DGEList(counts = counts_matrix, group = factor(active_meta$group))
+      y <- edgeR::calcNormFactors(y)
+      logcpm <- edgeR::cpm(y, log = TRUE, prior.count = 2)
+      list(logcpm = logcpm, meta = active_meta)
+    })
+    
+    # QC PCA Plot
+    output$qc_pca <- renderPlotly({
+      data <- qc_logcpm_data()
+      req(data)
+      logcpm <- data$logcpm
+      meta <- data$meta
+      
+      gene_vars <- matrixStats::rowVars(logcpm)
+      select_genes <- order(gene_vars, decreasing = TRUE)[1:min(500, nrow(logcpm))]
+      pca_res <- prcomp(t(logcpm[select_genes, , drop = FALSE]), scale. = TRUE)
+      
+      plot_df <- data.frame(
+        PC1 = pca_res$x[, 1],
+        PC2 = pca_res$x[, 2],
+        Sample = colnames(logcpm),
+        Group = meta$group
+      )
+      
+      p <- ggplot(plot_df, aes(x = PC1, y = PC2, color = Group, text = paste("Sample:", Sample, "<br>Group:", Group))) +
+        geom_point(size = 3.5, alpha = 0.8) +
+        scale_color_brewer(palette = "Set1") +
+        theme_minimal(base_size = 11) +
+        theme(panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, color="#e5e7eb")) +
+        labs(x = "PC1", y = "PC2")
+        
+      ggplotly(p, tooltip = "text") %>% layout(margin = list(t = 20, b = 20))
+    })
+    
+    # Metadata Validation Banner
+    output$metadata_validation <- renderUI({
+      req(rv$sample_metadata)
+      df <- rv$sample_metadata
+      df_active <- df[df$active, , drop = FALSE]
+      if (nrow(df_active) == 0) {
+        return(div(class = "alert alert-warning", "⚠ No active samples selected. Please activate at least one sample in the table below."))
+      }
+      has_missing <- any(is.na(df_active) | df_active == "" | df_active == "NA")
+      if (has_missing) {
+        div(class = "alert alert-warning",
+            tags$span(style = "font-weight: 600;", "⚠ Missing values detected"),
+            " - Some active samples have empty metadata cells. Please complete the table to ensure proper downstream analysis."
+        )
+      } else {
+        div(class = "alert alert-success",
+            tags$span(style = "font-weight: 600;", "✓ Metadata validated"),
+            " - All active samples have complete annotations. You can proceed with downstream analysis."
+        )
+      }
+    })
+    
+    # Pathway Enrichment summary boxes
+    output$pathway_box_go <- renderText({
+      results <- enrich_results()
+      if (is.null(results)) return("0")
+      go_cats <- intersect(names(results), c("BP", "MF", "CC"))
+      total <- 0
+      for (cat in go_cats) {
+        df <- as.data.frame(results[[cat]])
+        if (!is.null(df) && nrow(df) > 0) total <- total + nrow(df)
+      }
+      as.character(total)
+    })
+    
+    output$pathway_box_kegg <- renderText({
+      results <- enrich_results()
+      if (is.null(results) || !"KEGG" %in% names(results)) return("0")
+      df <- as.data.frame(results[["KEGG"]])
+      if (is.null(df)) return("0")
+      as.character(nrow(df))
+    })
+    
+    output$pathway_box_reactome <- renderText({
+      results <- enrich_results()
+      if (is.null(results) || !"REACTOME" %in% names(results)) return("0")
+      df <- as.data.frame(results[["REACTOME"]])
+      if (is.null(df)) return("0")
+      as.character(nrow(df))
+    })
 }
 
 shinyApp(ui, server)

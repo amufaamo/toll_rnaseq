@@ -86,6 +86,14 @@ dimensionReductionUI <- function(id) {
       )
     ),
     hr(),
+    fluidRow(
+      column(3, numericInput(ns("plot_w"), "Width (inch):", value = 8, min = 3, max = 30, step = 0.5)),
+      column(3, numericInput(ns("plot_h"), "Height (inch):", value = 6, min = 3, max = 30, step = 0.5)),
+      column(3, div(style = "margin-top: 25px;",
+        downloadButton(ns("downloadPDF"), "Save PDF (.pdf)", icon = icon("file-pdf"), class = "btn btn-outline-secondary")
+      ))
+    ),
+    hr(),
     withSpinner(uiOutput(ns("plotArea")), type = 6)
   )
 }
@@ -379,10 +387,14 @@ dimensionReductionServer <- function(id, rv) {
       results <- dimension_reduction_results()
       req(results)
       ns <- session$ns
+      h_in <- if (!is.null(input$plot_h) && !is.na(input$plot_h)) input$plot_h else 6
+      w_in <- if (!is.null(input$plot_w) && !is.na(input$plot_w)) input$plot_w else 8
+      h_px <- paste0(round(h_in * 96), "px")
+      w_px <- paste0(round(w_in * 96), "px")
       if (results$plot_type == "plotly") {
-        plotlyOutput(ns("interactivePlot"), height = "600px")
+        plotlyOutput(ns("interactivePlot"), height = h_px, width = w_px)
       } else if (results$plot_type == "static") {
-        plotOutput(ns("staticPlot"), height = "600px")
+        plotOutput(ns("staticPlot"), height = h_px, width = w_px)
       } else {
         tags$p("プロットタイプを判別できませんでした。")
       }
@@ -474,6 +486,87 @@ dimensionReductionServer <- function(id, rv) {
         p_to_save <- plot_object_reactive()
         req(p_to_save, inherits(p_to_save, "ggplot"))
         ggsave(file, plot = p_to_save, device = "png", width = 10, height = 8, dpi = 300)
+      }
+    )
+
+    output$downloadPDF <- downloadHandler(
+      filename = function() {
+        results <- dimension_reduction_results()
+        paste0(results$method, "_", Sys.Date(), ".pdf")
+      },
+      content = function(file) {
+        results <- dimension_reduction_results()
+        req(results)
+        w <- if (!is.null(input$plot_w) && !is.na(input$plot_w)) input$plot_w else 8
+        h <- if (!is.null(input$plot_h) && !is.na(input$plot_h)) input$plot_h else 6
+        plot_title <- paste(results$method, "Plot for Active Samples", results$title_suffix)
+
+        if (results$plot_type == "plotly") {
+          p <- results$plot_object
+          req(inherits(p, "ggplot"))
+          ggsave(file, plot = p, device = "pdf", width = w, height = h)
+
+        } else if (results$plot_type == "static") {
+          plot_obj_data <- results$plot_object
+
+          if (results$method %in% c("Heatmap", "DistHeatmap")) {
+            req(is.list(plot_obj_data), all(c("matrix", "annotation_col") %in% names(plot_obj_data)))
+            color_palette <- if (isTRUE(plot_obj_data$is_dist)) {
+              colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Blues")))(100)
+            } else {
+              colorRampPalette(rev(RColorBrewer::brewer.pal(9, "RdYlBu")))(100)
+            }
+            f_row <- if (!is.null(input$dim_fontsize_row)) as.numeric(input$dim_fontsize_row) else 8
+            f_col <- if (!is.null(input$dim_fontsize_col)) as.numeric(input$dim_fontsize_col) else 8
+            show_grp <- if (!is.null(input$dim_show_group)) input$dim_show_group else TRUE
+            pdf(file, width = w, height = h)
+            pheatmap::pheatmap(plot_obj_data$matrix,
+              annotation_col = if (show_grp) plot_obj_data$annotation_col else NA,
+              clustering_distance_rows = if (plot_obj_data$cluster_rows) plot_obj_data$dist_method else NA,
+              clustering_distance_cols = if (plot_obj_data$cluster_cols) plot_obj_data$dist_method else NA,
+              clustering_method = plot_obj_data$clustering_method,
+              cluster_rows = plot_obj_data$cluster_rows,
+              cluster_cols = plot_obj_data$cluster_cols,
+              show_rownames = (ncol(plot_obj_data$matrix) <= 40),
+              show_colnames = (ncol(plot_obj_data$matrix) <= 40),
+              display_numbers = plot_obj_data$display_numbers,
+              number_format = "%.2f", fontsize = 8, fontsize_row = f_row, fontsize_col = f_col,
+              main = plot_title, color = color_palette, na_col = "grey50"
+            )
+            dev.off()
+
+          } else if (results$method == "Dendrogram") {
+            req(inherits(plot_obj_data, "ggplot"))
+            ggsave(file, plot = plot_obj_data + ggtitle(plot_title), device = "pdf", width = w, height = h)
+
+          } else if (results$method == "Network") {
+            req(is.list(plot_obj_data), all(c("graph", "layout") %in% names(plot_obj_data)))
+            g <- plot_obj_data$graph
+            l <- plot_obj_data$layout
+            unique_groups <- unique(igraph::V(g)$group)
+            if (length(unique_groups) > 0) {
+              num_colors <- length(unique_groups)
+              group_colors <- if (num_colors <= 9) {
+                RColorBrewer::brewer.pal(max(3, num_colors), "Set1")[1:num_colors]
+              } else {
+                rainbow(num_colors)
+              }
+              names(group_colors) <- unique_groups
+              vertex_colors <- group_colors[as.character(igraph::V(g)$group)]
+            } else {
+              vertex_colors <- "skyblue"
+              group_colors <- NULL
+            }
+            pdf(file, width = w, height = h)
+            plot(g, layout = l, vertex.color = vertex_colors,
+                 vertex.label = igraph::V(g)$name, vertex.size = 10,
+                 vertex.label.cex = 0.8, edge.color = "grey50", main = plot_title)
+            if (!is.null(group_colors) && length(unique_groups) > 0) {
+              legend("topright", legend = unique_groups, fill = group_colors, border = NA, cex = 0.8, title = "Group")
+            }
+            dev.off()
+          }
+        }
       }
     )
   })
