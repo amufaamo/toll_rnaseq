@@ -25,6 +25,12 @@ AppState <- R6::R6Class(
     #' @field deg_results List of DESeq2 results (one per contrast)
     deg_results = NULL,
 
+    #' @field deg_multiverse Full result of one multiverse DEG run
+    deg_multiverse = NULL,
+
+    #' @field deg_multiverse_progress Small UI-only progress record
+    deg_multiverse_progress = NULL,
+
     #' @field gsea_results List of fgsea/enrichplot results
     gsea_results = NULL,
 
@@ -45,6 +51,8 @@ AppState <- R6::R6Class(
       self$metadata        <- reactiveVal(NULL)
       self$counts_filtered <- reactiveVal(NULL)
       self$deg_results     <- reactiveVal(list())
+      self$deg_multiverse  <- reactiveVal(NULL)
+      self$deg_multiverse_progress <- reactiveVal(NULL)
       self$gsea_results    <- reactiveVal(list())
       self$params_log      <- reactiveVal(list())
       self$species         <- reactiveVal("human")
@@ -53,6 +61,7 @@ AppState <- R6::R6Class(
         qc          = "pending",
         eda         = "pending",
         deg         = "pending",
+        deg_multiverse = "pending",
         enrichment  = "pending",
         gsva        = "pending",
         timeseries  = "pending",
@@ -96,6 +105,8 @@ AppState <- R6::R6Class(
       self$metadata(NULL)
       self$counts_filtered(NULL)
       self$deg_results(list())
+      self$deg_multiverse(NULL)
+      self$deg_multiverse_progress(NULL)
       self$gsea_results(list())
       self$params_log(list())
       self$species("human")
@@ -104,6 +115,7 @@ AppState <- R6::R6Class(
         qc         = "pending",
         eda        = "pending",
         deg        = "pending",
+        deg_multiverse = "pending",
         enrichment = "pending",
         gsva       = "pending",
         report     = "pending"

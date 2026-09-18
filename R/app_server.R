@@ -34,7 +34,7 @@ app_server <- function(input, output, session) {
   # ── Pipeline nav badges ────────────────────────────────────────────────────
   observe({
     status <- state$pipeline_status()
-    steps  <- c("upload", "qc", "eda", "deg", "enrichment", "gsva", "timeseries", "report")
+    steps  <- c("upload", "qc", "eda", "deg", "deg_multiverse", "enrichment", "gsva", "timeseries", "report")
     for (s in steps) {
       badge_id  <- paste0("badge_", s)
       badge_val <- switch(status[[s]],
@@ -51,6 +51,7 @@ app_server <- function(input, output, session) {
   mod_qc_server("qc",             state = state)
   mod_eda_server("eda",           state = state)
   mod_deg_server("deg",           state = state)
+  mod_deg_multiverse_server("deg_multiverse", state = state)
   mod_enrichment_server("enrichment", state = state)
   mod_gsva_server("gsva",             state = state)
   mod_deg_multi_server("upset",       state = state)

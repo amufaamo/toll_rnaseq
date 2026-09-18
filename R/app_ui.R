@@ -50,27 +50,32 @@ app_ui <- function(request) {
         mod_deg_ui("deg")
       ),
       nav_panel(
-        title = .nav_label("5", "Enrichment", "diagram-3"),
+        title = tagList(.nav_label("5", "Multiverse DEG", "diagram-3"), uiOutput("badge_deg_multiverse")),
+        value = "deg_multiverse",
+        mod_deg_multiverse_ui("deg_multiverse")
+      ),
+      nav_panel(
+        title = .nav_label("6", "Enrichment", "diagram-3"),
         value = "enrichment",
         mod_enrichment_ui("enrichment")
       ),
       nav_panel(
-        title = .nav_label("6", "GSVA", "diagram-2"),
+        title = .nav_label("7", "GSVA", "diagram-2"),
         value = "gsva",
         mod_gsva_ui("gsva")
       ),
       nav_panel(
-        title = .nav_label("7", "UpSet", "list-check"),
+        title = .nav_label("8", "UpSet", "list-check"),
         value = "upset",
         mod_deg_multi_ui("upset")
       ),
       nav_panel(
-        title = .nav_label("8", "Time-series", "activity"),
+        title = .nav_label("9", "Time-series", "activity"),
         value = "timeseries",
         mod_timeseries_ui("timeseries")
       ),
       nav_panel(
-        title = .nav_label("9", "Report", "file-earmark-text"),
+        title = .nav_label("10", "Report", "file-earmark-text"),
         value = "report",
         mod_report_ui("report")
       ),
