@@ -211,7 +211,16 @@ mv_fit_full_null <- function(counts, metadata, condition_col, ref_level, test_le
   beta0 <- beta
   beta0[, condition_coef] <- 0
   mu0 <- 2^(beta0 %*% t(x)) * factors
-  list(mu0 = mu0, dispersions = DESeq2::dispersions(dds), full_mu = mu_full,
+  # Genes with all-zero observed counts get NA beta/dispersion from DESeq2 (no
+  # information to fit a coefficient from). Such a gene has a legitimate null:
+  # it stays at zero under any specification, so its simulated null mean is 0,
+  # not "unknown". Left as NA, it silently poisons the whole bootstrap replicate
+  # (rnbinom(mu = NA) -> NA counts -> the alignment check in the next bootstrap
+  # fit trips on any(counts < 0) being NA rather than TRUE/FALSE).
+  mu0[is.na(mu0)] <- 0
+  dispersions <- DESeq2::dispersions(dds)
+  dispersions[is.na(dispersions)] <- 1e-8
+  list(mu0 = mu0, dispersions = dispersions, full_mu = mu_full,
        reconstruction_ok = TRUE, metadata = des$metadata)
 }
 

@@ -61,6 +61,23 @@ test_that("full-model null reconstruction is exact on the DESeq2 count scale", {
   expect_true(all(is.finite(fit$dispersions)))
 })
 
+test_that("an all-zero-count gene does not poison the null bootstrap", {
+  skip_mv_deps()
+  d <- make_mv_counts(seed = 5, n_genes = 60, n_de = 10)
+  d$counts["g1", ] <- 0L
+  fit <- mv_fit_full_null(d$counts, d$metadata, "condition", "C", "T")
+  expect_false(anyNA(fit$mu0))
+  expect_false(anyNA(fit$dispersions))
+  expect_equal(unname(fit$mu0["g1", ]), rep(0, ncol(fit$mu0)))
+  sim <- mv_simulate_null(fit, seed = 1)
+  expect_false(anyNA(sim))
+  expect_true(all(sim["g1", ] == 0))
+  # The full engine, not just the two building blocks above, must also complete.
+  run <- mv_run_multiverse(d$counts, d$metadata, "condition", "C", "T", B = 2, seed = 3,
+                           include_apeglm = FALSE)
+  expect_false(anyNA(run$efdr_curve$efdr_raw[run$efdr_curve$observed_calls > 0]))
+})
+
 test_that("multiverse engine is deterministic and produces a downstream contract", {
   skip_mv_deps()
   d <- make_mv_counts(seed = 11, n_genes = 180, n_de = 30)
