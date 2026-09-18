@@ -11,14 +11,17 @@ mv_plot_specification_curve <- function(run, gene, padj_cutoff = 0.05, lfc_cutof
   ord <- order(lfc, na.last = TRUE)
   specs <- specs[ord, , drop = FALSE]
   lfc <- lfc[ord]; padj <- padj[ord]
+  choices <- c(filter = "Filter", normalization = "Normalisation", method = "Method",
+               shrinkage = "Shrinkage", covariate = "Covariate")
+  # Explicit level order: the test-strength panel must sit above the choice matrix.
+  panels <- c("Signed -log10(FDR)", unname(choices))
   top <- data.frame(spec_rank = seq_along(lfc), value = sign(lfc) * -log10(pmax(padj, 1e-300)),
                     significance = ifelse(!is.na(padj) & padj <= padj_cutoff & lfc >= lfc_cutoff, "Up",
                     ifelse(!is.na(padj) & padj <= padj_cutoff & lfc <= -lfc_cutoff, "Down", "NS")),
-                    panel = "Signed -log10(FDR)")
-  choices <- c("filter", "normalization", "method", "shrinkage", "covariate")
-  lower <- do.call(rbind, lapply(choices, function(choice) data.frame(
+                    panel = factor("Signed -log10(FDR)", levels = panels))
+  lower <- do.call(rbind, lapply(names(choices), function(choice) data.frame(
     spec_rank = seq_len(nrow(specs)), value = 1, choice = as.character(specs[[choice]]),
-    panel = choice, stringsAsFactors = FALSE
+    panel = factor(choices[[choice]], levels = panels), stringsAsFactors = FALSE
   )))
   top$choice <- top$significance
   all <- rbind(top[, c("spec_rank", "value", "choice", "panel")], lower)
@@ -35,7 +38,8 @@ mv_plot_specification_curve <- function(run, gene, padj_cutoff = 0.05, lfc_cutof
                   title = paste("Specification curve:", gene)) +
     ggplot2::theme_minimal(base_size = 11) +
     ggplot2::theme(legend.position = "bottom", axis.text.x = ggplot2::element_blank(),
-                   axis.ticks.x = ggplot2::element_blank())
+                   axis.ticks.x = ggplot2::element_blank(),
+                   strip.text.y = ggplot2::element_text(angle = 0, hjust = 0))
 }
 
 #' Build a global multiverse stability summary

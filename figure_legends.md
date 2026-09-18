@@ -1,13 +1,103 @@
 # Figure Legends
 
-## Figure 1: System architecture and workflow of EasyRNA-Seq v4.0.
-The software seamlessly integrates an upstream Nextflow-based pipeline with a downstream interactive Shiny application structured via the `golem` framework. Raw FASTQ files are processed through STAR and FeatureCounts to generate a count matrix. The application core utilizes an R6 class (`AppState`) for efficient state management across eight interconnected modules: Upload, QC & Filter, Exploratory Data Analysis (PCA and Heatmap), Differential Expression (DESeq2 with apeglm shrinkage), Enrichment (fgsea and clusterProfiler), GSVA, UpSet plots, and Reporting. To maintain a responsive user interface during computationally intensive tasks like DESeq2 and GSVA, asynchronous processing is implemented using `ExtendedTask` alongside `future/promises`. The final outputs include journal-ready customizable figures (PDF/SVG/TIFF) with Nature, Cell, and Science aesthetics presets, comprehensive HTML reports, and fully reproducible R scripts tracking the user's interactive session.
+Software article, *Briefings in Bioinformatics*. Legends for the figures and tables in
+`manuscript_figures.md`; numbering follows that file.
 
-## Figure 2: The modernized user interface and export capabilities.
-The dashboard features a modern, intuitive layout designed for accessibility and ease of use, incorporating Okabe-Ito colorblind-safe palettes by default. A prominent feature is the comprehensive Export Modal, which allows users to directly download publication-quality figures. Users can select from various high-resolution formats including PDF, SVG, and TIFF, and apply journal-specific aesthetic presets (e.g., Nature, Cell, Science) with a single click. The non-blocking UI ensures seamless navigation even while generating complex visualizations.
+## Figure 1. Architecture of MultiverseDEG v4.0.
+MultiverseDEG v4.0 is a `golem`-packaged Shiny application with a `bslib` v5 interface that
+operates on a gene-by-sample matrix of integer counts and a sample metadata table;
+alignment and quantification from raw reads are outside the scope of the package and are
+not distributed with it. Application state is held in an R6 `AppState` object carrying the
+uploaded data, per-module results, a step-status map and a parameter log shared across
+modules. The interface is organised as ten sequential steps: Upload with format validation,
+QC and filtering, exploratory data analysis, differential expression with `DESeq2`
+(optionally with `apeglm` shrinkage) or `edgeR`, multiverse DEG analysis (highlighted;
+Figure 2), over-representation analysis with `clusterProfiler`, gene set variation
+analysis, UpSet comparison of DEG sets from different biological contrasts, time-series
+analysis with `maSigPro`, and report generation. The differential expression, multiverse
+DEG, enrichment, GSVA and time-series steps run their computations asynchronously in
+background R processes through the `ExtendedTask` API with `future` and `promises`, so the
+interface remains responsive. A multiverse result enters the shared results list under a
+`multiverse:` key with the `multiverse_stability` result type and is consumed by the
+enrichment and UpSet modules. Outputs are journal-ready figures exported through the
+`cairo_pdf` device (PDF) or as SVG with *Nature*, *Cell* and *Science* page-width presets,
+an HTML report, and a commented, reproducible R script for the session.
 
-## Figure 3: Case study applying EasyRNA-Seq to the GSE28422 dataset.
-We demonstrate the robust analytical capabilities of EasyRNA-Seq using the GSE28422 dataset. The analysis highlights advanced multi-group temporal comparisons, utilizing `maSigPro` to identify genes with significant temporal expression changes across different conditions. Furthermore, integration with WGCNA allows for the identification of hub genes within co-expression modules directly from the graphical interface. The generated visualizations, including temporal expression profiles and module-trait relationship heatmaps, illustrate the software's capacity to facilitate deep biological insights from complex transcriptomic experiments without requiring command-line programming.
+## Figure 2. The multiverse DEG workflow.
+For one fixed biological contrast the engine starts from raw integer counts, because
+low-count filtering is one of the varied dimensions. It builds a specification grid as a
+product over family-legal choices — two low-count filters crossed with four method arms
+(DESeq2 Wald without shrinkage, DESeq2 Wald with `apeglm`, edgeR quasi-likelihood F-test
+with TMM normalisation, edgeR likelihood-ratio test with TMM normalisation), doubling when
+a metadata covariate is nominated — and prunes specifications whose design is
+rank-deficient, whose covariate is confounded with the condition, or whose filter leaves
+too few genes, recording the reason. Every retained specification is fitted and its log2
+fold-change, raw *p*-value and BH-adjusted *p*-value are stored, so changing a call
+threshold re-thresholds stored statistics rather than refitting. Each gene receives a
+stability *T*, the fraction of specifications calling it, and a direction consistency *C*;
+a call requires *T* >= tau and *C* >= 0.90. Because a stability threshold is not an error
+rate, it is calibrated against a dataset-specific null: the full negative-binomial model is
+fitted, the reconstructed fitted mean is asserted equal to DESeq2's own `mu` assay, and the
+null mean is formed by setting only the condition coefficient to zero while retaining the
+intercept, covariate coefficients and count-scale normalisation factors. Each of *B*
+bootstrap replicates simulates counts from that null and re-runs every filter and
+specification from scratch, retaining only null discovery counts. The resulting effective
+FDR curve is evaluated at every attainable stability value *k/m* and made monotone by a
+cumulative minimum taken in ascending tau, the mirror of the sweep used for *p*-value-based
+*q*-values. The module then selects the smallest positive tau meeting the user's eFDR
+target and emits a stability-ranked table, a per-gene specification curve (Figure 3) and a
+hand-off to the downstream modules in which `padj` carries the gene's monotone eFDR, `stat`
+carries signed stability, and `pvalue` is `NA` because no valid pooled raw *p*-value exists.
 
-## Figure 4: Performance benchmarking across varying sample sizes.
-Computational performance and resource utilization of EasyRNA-Seq were evaluated using simulated datasets ranging from 10 to 500 samples. The benchmark measures both execution time and peak RAM consumption during differential expression and functional enrichment analyses. Results indicate that the application scales efficiently, with memory usage remaining stable due to optimized state management. The integration of asynchronous processing significantly reduces perceived wait times, ensuring a smooth experience even with extensive cohorts.
+## Figure 3. Per-gene specification curve from a multiverse DEG run.
+Output of the application's specification-curve view, generated by
+`scripts/generate_fig3_specification_curve.R` from a real run of the multiverse engine on a
+synthetic dataset of 400 genes with 40 true differentially expressed genes and n = 6 per
+group, using the eight-specification grid with B = 10 bootstrap replicates, a call rule of
+adjusted *p* <= 0.05 and absolute log2 fold-change >= 1, and a target eFDR of 0.10; the
+automatically selected stability threshold was tau = 0.125. Each column is one
+specification, ordered by that gene's log2 fold-change. The upper panel plots signed
+-log10(adjusted *p*), positive for an increase in the test group and negative for a
+decrease, which places DESeq2 and edgeR on a common test-strength scale despite their
+non-comparable standard errors; points are coloured by whether the gene meets the call rule
+in that specification. The lower matrix aligns to the same columns and shows the filter,
+normalisation, method, shrinkage and covariate that define each specification. Colours are
+from the Okabe-Ito palette and every colour-coded category is also labelled, so colour is
+never the only encoding. The gene shown, g10, is called in six of the eight specifications
+(stability 0.750, direction consistency 1.000): the two specifications that do not call it
+differ only in applying `apeglm` shrinkage, which moves the estimated log2 fold-change
+below the absolute cutoff of 1 while the adjusted *p*-value is unchanged. This is the
+dependence on analytic choice that the multiverse module is built to expose. As the
+in-application caption states, more columns agreeing does not by itself make a gene
+reliable: the specifications are re-analyses of the same samples, not independent
+replications.
+
+## Table 1. Comparison with graphical RNA-seq analysis tools.
+Comparison against the graphical platforms cited in the manuscript. Only features supported
+by the prior-art comparison in the Introduction and in *Relation to existing tools* are
+tabulated. Reproducible script generation is recorded for both MultiverseDEG and iDEP and
+is not treated as a differentiator, since iDEP already records selected parameters and
+emits R / R Markdown code. The differentiating row is the last one: existing graphical
+tools document one selected analysis path, including the reproducible ones, and do not
+report how far the result depends on that selection or attach a calibrated error rate to
+that dependence. Features implemented in MultiverseDEG whose presence in the comparator
+tools was not verified — asynchronous computation, colourblind-safe defaults, journal
+page-width export presets, time-series support and input size limits — are deliberately
+omitted rather than marked absent.
+
+## Table 2. Measured single-fit cost.
+Elapsed time for a single model fit on a simulated count matrix of 20,000 genes x 12
+samples. These measurements are the basis of the derived costs in Table 3 and are
+hardware- and data-dependent.
+
+## Table 3. Cost of a calibrated multiverse run.
+A calibrated run is approximately (*B* + 1) x |*S*| model fits plus the null fit and
+simulation, where |*S*| is the number of legal specifications and *B* the number of
+bootstrap replicates. Totals are derived from Table 2 at a mixed mean of about 2.5 s per
+fit for the implemented grid without a covariate (8 specifications) and with one covariate
+(16 specifications) at B = 20, and for the full 80-specification design at B = 100. The
+figures are reported to make the cost structure of the method explicit, not as a benchmark
+of the software against alternatives: multiverse analysis with simulation-based calibration
+is inherently one to three orders of magnitude more expensive than a single pipeline, which
+is why the batched asynchronous scheduler and the no-refit re-thresholding design are
+load-bearing rather than cosmetic.

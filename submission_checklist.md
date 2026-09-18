@@ -6,7 +6,7 @@
 - [ ] **Key Points**: 3 to 5 bullet points summarizing the main findings/impact (max ~100 characters per point).
 - [ ] **Keywords**: 8-10 words (e.g., RNA-seq, GUI, Shiny, bioinformatics tools, reproducibility).
 - [ ] **Introduction**: Context and significance of the software.
-- [ ] **Methods / Implementation**: Detailed explanation of architecture (ExtendedTask, Nextflow integration, Journal-Ready Export Engine).
+- [ ] **Methods / Implementation**: Detailed explanation of architecture (Multiverse DEG engine, ExtendedTask asynchronous computation, Journal-Ready Export Engine).
 - [ ] **Results and Discussion**: Benchmarks or case studies demonstrating performance over tools like iDEP, Galaxy, and DEBrowser.
 - [ ] **Conclusion**.
 - [ ] **Data Availability Statement**: Statement clarifying how users can access the tool and data.

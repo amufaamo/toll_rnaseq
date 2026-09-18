@@ -1,0 +1,24 @@
+graph TD
+    classDef obs fill:#2d4263,stroke:#0f3460,stroke-width:1.5px,color:#fff;
+    classDef null fill:#0072b2,stroke:#023858,stroke-width:1.5px,color:#fff;
+    classDef calib fill:#d55e00,stroke:#7f2704,stroke-width:2px,color:#fff;
+    classDef output fill:#ecdbba,stroke:#e65100,stroke-width:2px,color:#333;
+
+    A["One fixed biological contrast<br/>raw integer counts, metadata"]:::obs
+
+    A --> B["Build the specification grid<br/>filter x method x shrinkage x covariate<br/>family-legal combinations only"]:::obs
+    B --> B2["Prune rank-deficient designs, confounded covariates<br/>and filters leaving too few genes; record the reason"]:::obs
+    B2 --> C["Fit every retained specification<br/>DESeq2 Wald with and without apeglm,<br/>edgeR QL F-test, edgeR LRT (TMM)<br/>store log2FC, p and BH-adjusted p"]:::obs
+    C --> D["Per-gene stability T = fraction of specifications<br/>calling the gene at padj &lt;= q and |log2FC| &gt;= a<br/>direction consistency C &gt;= 0.90 required"]:::obs
+
+    A --> E["Fit the full negative-binomial model<br/>condition + covariates; assert the reconstructed<br/>mean equals the DESeq2 mu assay"]:::null
+    E --> F["Null means: set only the condition coefficient to zero<br/>keep intercept, covariate coefficients<br/>and count-scale normalisation factors"]:::null
+    F --> G["B parametric NB bootstrap replicates<br/>every filter and specification re-run from scratch<br/>retain only null discovery counts R_b(tau)"]:::null
+
+    D --> H
+    G --> H["eFDR(tau) = [(1 + sum_b R_b(tau)) / (B + 1)] / max(R_obs(tau), 1)<br/>evaluated at every attainable tau = k/m,<br/>made monotone by a cumulative minimum in ascending tau"]:::calib
+    H --> I["Select the smallest positive tau meeting the eFDR target<br/>tau = 0 excluded; re-thresholding refits nothing"]:::calib
+
+    I --> J["Stability-ranked gene table<br/>with per-gene eFDR"]:::output
+    I --> K["Per-gene specification curve<br/>(Figure 3)"]:::output
+    J --> L["Hand-off to the Enrichment and UpSet modules<br/>key multiverse:TEST_vs_REF<br/>result type multiverse_stability, pvalue = NA"]:::output
