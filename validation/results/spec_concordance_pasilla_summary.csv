@@ -1,0 +1,2 @@
+"run","dataset","n_specs","n_genes","obs_calls_union","obs_calls_unanimous","obs_jaccard_median","obs_jaccard_min","obs_jaccard_same_method","obs_jaccard_diff_method","obs_jaccard_same_cov","obs_jaccard_diff_cov","null_calls_per_spec_mean","null_jaccard_median","null_union_mean","null_frac_stability_ge_2m","null_frac_stability_ge_2m_if_independent","n_null_replicates","elapsed_sec"
+"pasilla","pasilla",16,12359,296,163,0.787553849663817,0.635379061371841,0.853847854931446,0.778803626713843,0.821486928104575,0.765499294133655,1.0875,0,5,0.6,0,5,325.803826570511

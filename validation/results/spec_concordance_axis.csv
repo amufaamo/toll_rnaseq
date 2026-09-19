@@ -1,0 +1,23 @@
+"run","source","axis","median_jaccard","n_pairs"
+"airway","null","covariate differs",0,256
+"airway","null","filter twin",0.5,16
+"airway","null","method differs",0.25,108
+"airway","observed","covariate differs",0.65735681369322,64
+"airway","observed","filter twin",0.931615636960087,8
+"airway","observed","method differs",0.788561907443913,48
+"gse60450basal","null","filter twin",1,20
+"gse60450basal","null","method differs",0.394736842105263,120
+"gse60450basal","observed","filter twin",0.995139538775963,4
+"gse60450basal","observed","method differs",0.791192089949641,24
+"gse60450cov","null","covariate differs",0,300
+"gse60450cov","null","filter twin",1,23
+"gse60450cov","null","method differs",0.0801282051282051,172
+"gse60450cov","observed","covariate differs",0.124433972289066,64
+"gse60450cov","observed","filter twin",0.972276688453159,8
+"gse60450cov","observed","method differs",0.648867170839792,48
+"pasilla","null","covariate differs",0,204
+"pasilla","null","filter twin",1,19
+"pasilla","null","method differs",0,148
+"pasilla","observed","covariate differs",0.765499294133655,64
+"pasilla","observed","filter twin",0.981944444444445,8
+"pasilla","observed","method differs",0.814814814814815,48

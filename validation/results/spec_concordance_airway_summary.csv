@@ -1,0 +1,2 @@
+"run","dataset","n_specs","n_genes","obs_calls_union","obs_calls_unanimous","obs_jaccard_median","obs_jaccard_min","obs_jaccard_same_method","obs_jaccard_diff_method","obs_jaccard_same_cov","obs_jaccard_diff_cov","null_calls_per_spec_mean","null_jaccard_median","null_union_mean","null_frac_stability_ge_2m","null_frac_stability_ge_2m_if_independent","n_null_replicates","elapsed_sec"
+"airway","airway",16,33469,1282,539,0.727537811241001,0.479806138933764,0.748436984265039,0.722433294030307,0.813043752986569,0.657356813693219,1.275,0,12,0.233333333333333,0,5,759.504545688629

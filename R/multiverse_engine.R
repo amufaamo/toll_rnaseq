@@ -259,7 +259,7 @@ mv_simulate_null <- function(null_fit, seed) {
 #' Run the MVP bootstrap calibration
 #' @noRd
 mv_bootstrap_efdr <- function(observed, B = 100, seed = 1, padj_cutoff = 0.05,
-                              lfc_cutoff = 1, direction_cutoff = 0.90) {
+                              lfc_cutoff = 1, direction_cutoff = 0.90, target_efdr = 0.10) {
   if (B < 1) stop("B must be positive.", call. = FALSE)
   cc <- observed$contrast
   null_fit <- mv_fit_full_null(observed$counts, observed$metadata, cc$condition_col,
@@ -271,7 +271,7 @@ mv_bootstrap_efdr <- function(observed, B = 100, seed = 1, padj_cutoff = 0.05,
                            cc$covariate, include_apeglm = any(observed$specifications$method == "deseq_wald_apeglm"))
     boot[[b]] <- mv_compute_stability(run$stats, run$tested, padj_cutoff, lfc_cutoff, direction_cutoff)
   }
-  .mv_efdr_curve(observed, boot)
+  .mv_efdr_curve(observed, boot, target_efdr)
 }
 
 #' Run one independently schedulable null-bootstrap replicate
@@ -299,7 +299,7 @@ mv_run_multiverse <- function(counts, metadata, condition_col, ref_level, test_l
   observed$stability <- mv_compute_stability(observed$stats, observed$tested,
                                              padj_cutoff, lfc_cutoff, direction_cutoff)
   calibration <- mv_bootstrap_efdr(observed, B, seed, padj_cutoff, lfc_cutoff,
-                                   direction_cutoff)
+                                   direction_cutoff, target_efdr)
   stability <- mv_attach_efdr(observed$stability, calibration$curve, target_efdr)
   list(run = observed, stability = stability, efdr_curve = calibration$curve,
        selected_tau = calibration$selected_tau, B = B, seed = seed,

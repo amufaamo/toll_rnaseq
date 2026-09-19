@@ -78,6 +78,18 @@ test_that("an all-zero-count gene does not poison the null bootstrap", {
   expect_false(anyNA(run$efdr_curve$efdr_raw[run$efdr_curve$observed_calls > 0]))
 })
 
+test_that("mv_bootstrap_efdr()/mv_run_multiverse() select tau against the requested target, not a hardcoded 0.10", {
+  skip_mv_deps()
+  d <- make_mv_counts(seed = 7, n_genes = 200, n_de = 20)
+  obs <- mv_run_observed(d$counts, d$metadata, "condition", "C", "T", include_apeglm = FALSE)
+  obs$stability <- mv_compute_stability(obs$stats, obs$tested, 0.05, 1, 0.90)
+  cal_loose <- mv_bootstrap_efdr(obs, B = 5, seed = 1, target_efdr = 0.50)
+  cal_strict <- mv_bootstrap_efdr(obs, B = 5, seed = 1, target_efdr = 0.01)
+  # A stricter target can only select an equal-or-higher stability threshold.
+  expect_gte(cal_strict$selected_tau, cal_loose$selected_tau)
+  expect_gt(cal_strict$selected_tau, cal_loose$selected_tau)
+})
+
 test_that("multiverse engine is deterministic and produces a downstream contract", {
   skip_mv_deps()
   d <- make_mv_counts(seed = 11, n_genes = 180, n_de = 30)

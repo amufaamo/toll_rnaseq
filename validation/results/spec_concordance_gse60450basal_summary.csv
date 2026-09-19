@@ -1,0 +1,2 @@
+"run","dataset","n_specs","n_genes","obs_calls_union","obs_calls_unanimous","obs_jaccard_median","obs_jaccard_min","obs_jaccard_same_method","obs_jaccard_diff_method","obs_jaccard_same_cov","obs_jaccard_diff_cov","null_calls_per_spec_mean","null_jaccard_median","null_union_mean","null_frac_stability_ge_2m","null_frac_stability_ge_2m_if_independent","n_null_replicates","elapsed_sec"
+"gse60450basal","GSE60450basal",8,20024,1713,1082,0.813217337394539,0.634976525821596,0.995139538775962,0.791192089949642,0.813217337394539,NA,7.85,0.6,19,0.905263157894737,0,5,261.694418668747
